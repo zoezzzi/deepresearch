@@ -1,0 +1,33 @@
+# Trae 专属配置目录（截图里的 .trae 文件夹）
+.trae/
+
+# Python 编译缓存（截图里的 __pycache__ 和 .pyc 文件）
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 其他常见需要忽略的文件
+# IDE 配置
+.vscode/
+
+# 环境变量
+.env
+.env.local
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+backend/logs
+
+backend/reports
+backend/tests
+backend/requirements.in
+
+docs/
+scripts/
+
+
