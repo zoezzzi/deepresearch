@@ -1,8 +1,8 @@
 from typing import Dict, Type
-from .base import LLMClient
-from .langchain_client import LangChainClient
-from infrastructure.config import get_settings
-from infrastructure.logger import logger
+from infrastructure.llm.base import LLMClient
+from infrastructure.llm.langchain_client import LangChainClient
+from common.config import get_settings
+from common.logger import logger
 
 settings = get_settings()
 

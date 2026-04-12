@@ -17,8 +17,6 @@ from .events import (
 )
 from .workflow import (
     WorkflowState,
-    InMemorySaver,
-    get_in_memory_saver,
     ResearchWorkflowGraph
 )
 from .service_factory import (
@@ -41,8 +39,6 @@ __all__ = [
     "EventPublisher",
     "get_event_publisher",
     "WorkflowState",
-    "InMemorySaver",
-    "get_in_memory_saver",
     "ResearchWorkflowGraph",
     "get_sse_manager",
     "create_research_application_service"

@@ -9,8 +9,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from typing import Generator
-from infrastructure.logger import logger
-from infrastructure.config import get_settings
+from common.logger import logger
+from common.config import get_settings
 
 settings = get_settings()
 

@@ -1,7 +1,7 @@
 from typing import Optional, Dict
 from domain.repositories.workflow_repository import WorkflowRepository
 from domain.entities.workflow import Workflow
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class InMemoryWorkflowRepository(WorkflowRepository):

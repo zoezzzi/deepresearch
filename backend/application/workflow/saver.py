@@ -1,168 +1,193 @@
+import asyncio
 from typing import Dict, Any, Optional
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.runnables import RunnableConfig
-from infrastructure.logger import logger
-from infrastructure.config import get_settings
-from common.utils.time_utils import get_current_utc_time
 
-
-class InMemorySaver(BaseCheckpointSaver):
-    serde = JsonPlusSerializer()
-
-    def __init__(self):
-        super().__init__()
-        self._storage: Dict[str, Dict[str, Any]] = {}
-        logger.warning("InMemorySaver initialized - this should only be used for testing!")
-
-    def get(self, config: RunnableConfig) -> Optional[Dict[str, Any]]:
-        thread_id = config.get("configurable", {}).get("thread_id")
-        if not thread_id:
-            return None
-        
-        checkpoint = self._storage.get(thread_id)
-        if checkpoint:
-            logger.debug(f"Retrieved checkpoint for thread {thread_id}")
-        return checkpoint
-
-    def put(
-        self,
-        config: RunnableConfig,
-        checkpoint: Dict[str, Any],
-        metadata: Dict[str, Any]
-    ) -> RunnableConfig:
-        thread_id = config.get("configurable", {}).get("thread_id")
-        if not thread_id:
-            raise ValueError("thread_id is required in config")
-        
-        self._storage[thread_id] = {
-            **checkpoint,
-            "metadata": metadata,
-            "saved_at": get_current_utc_time()
-        }
-        logger.debug(f"Saved checkpoint for thread {thread_id}")
-        return config
-
-    def list(self, config: RunnableConfig, limit: Optional[int] = None) -> Any:
-        thread_id = config.get("configurable", {}).get("thread_id")
-        if not thread_id:
-            return []
-        
-        checkpoint = self._storage.get(thread_id)
-        if checkpoint:
-            return [checkpoint]
-        return []
-
-
-_in_memory_saver_instance: Optional[InMemorySaver] = None
-
-
-def get_in_memory_saver() -> InMemorySaver:
-    global _in_memory_saver_instance
-    if _in_memory_saver_instance is None:
-        _in_memory_saver_instance = InMemorySaver()
-    return _in_memory_saver_instance
+from common.logger import logger
+from common.config import get_settings
+from common.exceptions import CheckpointConnectionError
+from infrastructure.db.async_pool import get_connection_pool, check_pool_health
 
 
 class AsyncPostgresSaverManager:
     """
     管理 AsyncPostgresSaver 的生命周期
-    由于 AsyncPostgresSaver 是异步上下文管理器，需要通过此类来管理
+    
+    遵循"快速失败"和"显式处理"原则：
+    - 启动时强制验证，失败立即终止
+    - 运行时带重试机制，失败抛出明确异常
+    - 彻底移除 InMemorySaver 降级逻辑
     """
 
+    # 重试配置
+    MAX_RETRIES = 3
+    BASE_DELAY = 1.0  # 秒
+    MAX_DELAY = 30.0  # 秒
+
     def __init__(self):
-        self._db_uri = None
-        self._saver = None
-        self._is_in_memory = False
-        self._context_manager = None
+        self._saver: Optional[AsyncPostgresSaver] = None
+        self._initialized = False
 
-    async def _is_connection_alive(self) -> bool:
+    async def _check_health(self) -> bool:
         """
-        检查数据库连接是否仍然存活
-        通过尝试使用 saver 来检测连接状态
+        检查 saver 健康状态
+        
+        验证连接池健康，并尝试执行一次简单的数据库操作。
+        
+        Returns:
+            True 如果健康，False 否则
         """
-        if self._saver is None or self._is_in_memory:
-            return False
-
         try:
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-            if isinstance(self._saver, AsyncPostgresSaver):
-                # 尝试执行一个简单的操作来检测连接
-                # 不直接访问私有属性，而是通过公共方法
-                # 这里我们使用一个简单的配置来测试连接
-                test_config = {"configurable": {"thread_id": "test-connection-check"}}
-                # 尝试获取 checkpoint（即使不存在也会测试连接）
-                await self._saver.get(test_config)
-                return True
+            # 首先检查连接池健康
+            pool_healthy = await check_pool_health()
+            if not pool_healthy:
+                logger.debug("[AsyncPostgresSaverManager] Pool health check failed")
+                return False
+
+            # 如果 saver 已初始化，尝试执行一次 get 操作验证
+            if self._saver is not None:
+                try:
+                    # 使用一个测试 thread_id 执行 aget 操作（异步接口）
+                    test_config = RunnableConfig(configurable={"thread_id": "__health_check__"})
+                    await self._saver.aget(test_config)
+                    return True
+                except Exception as e:
+                    logger.debug(f"[AsyncPostgresSaverManager] Saver health check failed: {e}")
+                    return False
+
+            return True
         except Exception as e:
-            logger.warning(f"[AsyncPostgresSaverManager] Connection check failed: {e}")
+            logger.debug(f"[AsyncPostgresSaverManager] Health check error: {e}")
             return False
-        return False
 
-    async def _close_saver(self):
-        """安全关闭当前的 saver 连接"""
-        if self._context_manager and not self._is_in_memory:
+    async def _initialize_saver(self) -> None:
+        """
+        初始化 AsyncPostgresSaver
+        
+        从连接池获取连接创建 saver 实例。
+        
+        Raises:
+            Exception: 初始化失败时抛出
+        """
+        pool = get_connection_pool()
+        
+        async with pool.connection() as conn:
+            self._saver = AsyncPostgresSaver(conn)
+            self._initialized = True
+            
+        logger.info("[AsyncPostgresSaverManager] AsyncPostgresSaver initialized successfully")
+
+    async def initialize_and_verify(self) -> AsyncPostgresSaver:
+        """
+        初始化并验证 saver（用于启动时强制检查）
+        
+        初始化 saver 并执行一次数据库操作验证。
+        
+        Returns:
+            AsyncPostgresSaver: 初始化并验证成功的 saver
+            
+        Raises:
+            Exception: 初始化或验证失败时抛出
+        """
+        logger.info("[AsyncPostgresSaverManager] Initializing and verifying saver...")
+        
+        # 初始化 saver
+        await self._initialize_saver()
+        
+        # 验证 saver 可用性（执行一次 aget 操作）
+        test_config = RunnableConfig(configurable={"thread_id": "__init_verify__"})
+        try:
+            await self._saver.aget(test_config)
+            logger.info("[AsyncPostgresSaverManager] Saver initialized and verified successfully")
+            return self._saver
+        except Exception as e:
+            logger.error(f"[AsyncPostgresSaverManager] Saver verification failed: {e}")
+            self._saver = None
+            self._initialized = False
+            raise
+
+    async def get_saver(self, thread_id: str = None) -> AsyncPostgresSaver:
+        """
+        获取 saver 实例，带重试和熔断机制
+        
+        如果 saver 已初始化且健康，直接返回。
+        否则进入重试逻辑，重试耗尽后抛出 CheckpointConnectionError。
+        
+        Args:
+            thread_id: 工作流线程ID，用于错误日志记录
+            
+        Returns:
+            AsyncPostgresSaver: 可用的 saver 实例
+            
+        Raises:
+            CheckpointConnectionError: 连接失败且重试耗尽时抛出
+        """
+        # 如果已初始化且健康，直接返回
+        if self._saver is not None and await self._check_health():
+            return self._saver
+
+        # 需要重新初始化，进入重试逻辑
+        logger.warning("[AsyncPostgresSaverManager] Saver not available, entering retry loop...")
+        
+        last_error = None
+        for attempt in range(self.MAX_RETRIES):
             try:
-                await self._context_manager.__aexit__(None, None, None)
-                logger.info("[AsyncPostgresSaverManager] Previous saver connection closed")
+                logger.info(f"[AsyncPostgresSaverManager] Retry attempt {attempt + 1}/{self.MAX_RETRIES}")
+                
+                # 尝试初始化
+                await self._initialize_saver()
+                
+                # 验证健康状态
+                if await self._check_health():
+                    logger.info(f"[AsyncPostgresSaverManager] Saver available after {attempt + 1} attempts")
+                    return self._saver
+                else:
+                    # 初始化成功但健康检查失败，清理后重试
+                    logger.warning(f"[AsyncPostgresSaverManager] Saver initialized but health check failed")
+                    self._saver = None
+                    self._initialized = False
+                    
             except Exception as e:
-                logger.warning(f"[AsyncPostgresSaverManager] Error closing previous saver: {e}")
-            finally:
+                last_error = e
+                logger.warning(f"[AsyncPostgresSaverManager] Retry attempt {attempt + 1} failed: {e}")
+                
+                # 清理失败状态
                 self._saver = None
-                self._context_manager = None
+                self._initialized = False
+            
+            # 计算退避延迟（指数退避）
+            if attempt < self.MAX_RETRIES - 1:
+                delay = min(self.BASE_DELAY * (2 ** attempt), self.MAX_DELAY)
+                logger.info(f"[AsyncPostgresSaverManager] Retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+        
+        # 重试耗尽，抛出明确异常
+        error_msg = f"无法连接到 Checkpoint 存储，已重试 {self.MAX_RETRIES} 次"
+        if last_error:
+            error_msg += f"，最后错误: {last_error}"
+        
+        logger.error(f"[AsyncPostgresSaverManager] {error_msg}")
+        raise CheckpointConnectionError(
+            message=error_msg,
+            thread_id=thread_id,
+            retry_count=self.MAX_RETRIES
+        )
 
-    async def get_saver(self):
-        """
-        在异步上下文中获取 saver 实例
-        如果尚未初始化或连接已关闭，则创建新的连接
-        """
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-        # 检查现有连接是否仍然存活
-        if self._saver is not None and not self._is_in_memory:
-            is_alive = await self._is_connection_alive()
-            if not is_alive:
-                logger.error("[ALERT] 数据库连接已关闭，正在重新建立连接")
-                logger.error("[ALERT] 这可能是由于 PostgreSQL 空闲超时或网络问题导致")
-                logger.error("[ALERT] 建议检查 PostgreSQL 的 idle_in_transaction_session_timeout 配置")
-                await self._close_saver()
-
-        if self._saver is None:
-            settings = get_settings()
-
-            self._db_uri = settings.DATABASE_URL.replace("postgresql+psycopg://", "postgresql://")
-            logger.info(f"[AsyncPostgresSaverManager] Initializing with database URL: {self._db_uri.replace(settings.POSTGRES_PASSWORD, '***')}")
-
-            try:
-                # 创建 AsyncPostgresSaver 实例（在上下文中）
-                self._context_manager = AsyncPostgresSaver.from_conn_string(self._db_uri)
-                self._saver = await self._context_manager.__aenter__()
-                self._is_in_memory = False
-                logger.info("[AsyncPostgresSaverManager] AsyncPostgresSaver initialized successfully")
-            except Exception as e:
-                logger.error(f"[AsyncPostgresSaverManager] Failed to initialize AsyncPostgresSaver: {e}")
-                # 回退到 InMemorySaver
-                logger.warning("[AsyncPostgresSaverManager] Falling back to InMemorySaver")
-                self._saver = get_in_memory_saver()
-                self._is_in_memory = True
-
-        return self._saver
-    
     async def close(self):
-        """关闭 saver 连接"""
-        if self._context_manager and not self._is_in_memory:
-            try:
-                await self._context_manager.__aexit__(None, None, None)
-                logger.info("[AsyncPostgresSaverManager] AsyncPostgresSaver closed successfully")
-            except Exception as e:
-                logger.error(f"[AsyncPostgresSaverManager] Error closing AsyncPostgresSaver: {e}")
-            finally:
-                self._saver = None
-                self._context_manager = None
-    
-    def is_in_memory(self) -> bool:
-        """检查是否使用 InMemorySaver（回退模式）"""
-        return self._is_in_memory
+        """
+        关闭 saver
+        
+        清理 saver 引用，连接池由全局管理。
+        """
+        if self._saver is not None:
+            logger.info("[AsyncPostgresSaverManager] Cleaning up saver reference")
+            self._saver = None
+            self._initialized = False
+
+    def is_initialized(self) -> bool:
+        """检查 saver 是否已初始化"""
+        return self._initialized and self._saver is not None
 
 
 # 全局管理器实例
@@ -180,53 +205,25 @@ def get_saver_manager() -> AsyncPostgresSaverManager:
 async def setup_checkpointer():
     """
     初始化 checkpoint 表（首次运行时需要调用）
-    注意：现在通过 AsyncPostgresSaverManager 管理，此方法主要用于兼容性
+    
+    使用连接池获取连接来创建表。
+    失败时抛出异常，不静默处理。
+    
+    Raises:
+        Exception: 设置失败时抛出
     """
+    settings = get_settings()
+    
+    logger.info(f"[AsyncPostgresSaverManager] Setting up checkpoint tables for database: {settings.POSTGRES_DB}")
+    
     try:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        from psycopg import AsyncConnection
-        
-        settings = get_settings()
-        
-        # AsyncPostgresSaver.from_conn_string 需要 key=value 格式的连接字符串
-        # 而不是 postgresql:// URL 格式
-        conninfo = (
-            f"host={settings.POSTGRES_HOST} "
-            f"port={settings.POSTGRES_PORT} "
-            f"dbname={settings.POSTGRES_DB} "
-            f"user={settings.POSTGRES_USER} "
-            f"password={settings.POSTGRES_PASSWORD}"
-        )
-        
-        logger.info(f"[AsyncPostgresSaverManager] Setting up checkpoint for database: {settings.POSTGRES_DB}")
-        
-        # 创建数据库连接（autocommit=True 避免事务块问题）
-        conn = await AsyncConnection.connect(conninfo, autocommit=True)
-        
-        try:
-            # 创建 saver 实例
+        pool = get_connection_pool()
+        async with pool.connection() as conn:
             saver = AsyncPostgresSaver(conn)
-            
-            # 确保表已创建
             await saver.setup()
-            logger.info("[AsyncPostgresSaverManager] Checkpoint tables verified/created")
-        finally:
-            # 关闭连接
-            await conn.close()
-            
+            logger.info("[AsyncPostgresSaverManager] Checkpoint tables verified/created successfully")
     except Exception as e:
         logger.error(f"[AsyncPostgresSaverManager] Failed to setup checkpoint tables: {e}")
         import traceback
         logger.error(f"[AsyncPostgresSaverManager] Traceback: {traceback.format_exc()}")
-        # 不再抛出异常，让应用继续启动
-        logger.warning("[AsyncPostgresSaverManager] Application will start without checkpoint persistence")
-
-
-# 兼容性：保留旧的函数名，但返回管理器
-async def get_async_postgres_saver():
-    """
-    兼容性函数，返回 AsyncPostgresSaverManager 实例
-    注意：此函数现在返回管理器，需要通过 manager.get_saver() 获取实际的 saver
-    """
-    logger.warning("[Deprecated] get_async_postgres_saver() is deprecated, use get_saver_manager() instead")
-    return get_saver_manager()
+        raise RuntimeError(f"Checkpoint 表初始化失败: {e}") from e

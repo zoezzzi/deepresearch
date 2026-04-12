@@ -9,7 +9,7 @@ from .event_types import (
     ErrorEvent
 )
 from infrastructure.sse.manager import get_sse_manager
-from infrastructure.logger import logger
+from common.logger import logger
 from common.utils.time_utils import get_current_utc_time
 
 
@@ -48,13 +48,17 @@ class EventPublisher:
         workflow_id: str,
         task_id: str,
         task_title: str,
-        summary: str
+        summary: str,
+        sources_summary: str,
+        notices: str
     ) -> None:
         event = TaskCompleteEvent(
             workflow_id=workflow_id,
             task_id=task_id,
             task_title=task_title,
             summary=summary,
+            sources_summary=sources_summary,
+            notices=notices,
             timestamp=get_current_utc_time()
         )
         await self._publish(event)

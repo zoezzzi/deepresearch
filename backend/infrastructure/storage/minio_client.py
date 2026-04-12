@@ -2,9 +2,9 @@ from typing import Optional
 from minio import Minio
 from minio.error import S3Error
 from io import BytesIO
-from .base import ObjectStorage
-from infrastructure.config import get_settings
-from infrastructure.logger import logger
+from infrastructure.storage.base import ObjectStorage
+from common.config import get_settings
+from common.logger import logger
 
 settings = get_settings()
 

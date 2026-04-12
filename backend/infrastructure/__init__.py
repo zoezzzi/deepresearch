@@ -1,5 +1,5 @@
-from .config import Settings, get_settings
-from .logger import logger
+from common.config import Settings, get_settings
+from common.logger import logger
 from .db import (
     Base,
     engine,

@@ -1,7 +1,7 @@
 from typing import Dict, Type
-from .base import SearchSource
-from .tavily_source import TavilySearchSource
-from infrastructure.logger import logger
+from infrastructure.search.base import SearchSource
+from infrastructure.search.tavily_source import TavilySearchSource
+from common.logger import logger
 
 
 class SearchSourceFactory:

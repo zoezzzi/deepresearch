@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     
     TAVILY_API_KEY: str = ""
     
+    # 数据库连接池配置
+    DB_POOL_MIN_SIZE: int = 5
+    DB_POOL_MAX_SIZE: int = 20
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_MAX_IDLE: int = 300
+    DB_POOL_MAX_LIFETIME: int = 3600
+    
     @property
     def DATABASE_URL(self) -> str:
         # URL 编码密码，防止特殊字符导致连接失败

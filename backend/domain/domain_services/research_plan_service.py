@@ -6,7 +6,7 @@ from domain.value_objects.task_id import TaskId
 from domain.value_objects.workflow_id import WorkflowId
 from domain.value_objects.task_intent import TaskIntent
 from domain.value_objects.search_query import SearchQuery
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class ResearchPlanService:

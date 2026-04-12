@@ -1,13 +1,13 @@
 from typing import Optional
 from pathlib import Path
 import uuid
-from .base import ObjectStorage
-from infrastructure.logger import logger
+from infrastructure.storage.base import ObjectStorage
+from common.logger import logger
+from common.config import get_settings
 
 
 class LocalObjectStorage(ObjectStorage):
     def __init__(self, storage_path: str = None, url_prefix: str = None):
-        from infrastructure.config import get_settings
         settings = get_settings()
         self.storage_path = Path(storage_path or settings.REPORT_STORAGE_PATH)
         self.url_prefix = url_prefix or settings.REPORT_URL_PREFIX
@@ -118,4 +118,23 @@ class LocalObjectStorage(ObjectStorage):
             return None
         except Exception as e:
             logger.error(f"[LocalObjectStorage] Error finding report for workflow {workflow_id}: {e}")
+            return None
+    
+    async def read_file(self, object_name: str) -> Optional[str]:
+        """
+        读取文件内容，返回字符串
+        
+        Args:
+            object_name: 对象名称
+
+        Returns:
+            文件内容字符串，如果未找到则返回 None
+        """
+        try:
+            data = await self.download_object("reports", object_name)
+            if data is not None:
+                return data.decode('utf-8')
+            return None
+        except Exception as e:
+            logger.error(f"[LocalObjectStorage] Error reading file {object_name}: {e}")
             return None

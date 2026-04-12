@@ -4,7 +4,7 @@ from domain.value_objects.task_intent import TaskIntent
 from domain.value_objects.task_summary import TaskSummary
 from domain.value_objects.sources_summary import SourcesSummary
 from domain.value_objects.notices import Notices
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class SummarizerAgent(Agent):

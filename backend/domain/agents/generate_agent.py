@@ -2,7 +2,7 @@ from typing import List
 from .base import Agent
 from domain.entities.task import Task
 from domain.value_objects.report_content import ReportContent
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class GenerateAgent(Agent):

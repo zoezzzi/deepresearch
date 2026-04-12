@@ -2,7 +2,7 @@ from typing import Dict, Set, Any
 from asyncio import Queue
 import json
 from datetime import datetime
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class DateTimeEncoder(json.JSONEncoder):

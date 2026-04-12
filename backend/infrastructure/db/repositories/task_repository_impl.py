@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from domain.repositories.task_repository import TaskRepository
 from domain.entities.task import Task
 from infrastructure.db.models import TaskModel
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class TaskRepositoryImpl(TaskRepository):
@@ -45,7 +45,7 @@ class TaskRepositoryImpl(TaskRepository):
             intent=task.intent.value,
             query=task.query.value,
             order=task.order,
-            status=task.status.value,
+            status=task.status,
             summary=task.summary.value if task.summary else None,
             sources_summary=task.sources_summary.value if task.sources_summary else None,
             notices=task.notices.value if task.notices else None,
@@ -89,7 +89,7 @@ class TaskRepositoryImpl(TaskRepository):
             model.intent = task.intent.value
             model.query = task.query.value
             model.order = task.order
-            model.status = task.status.value
+            model.status = task.status
             model.summary = task.summary.value if task.summary else None
             model.sources_summary = task.sources_summary.value if task.sources_summary else None
             model.notices = task.notices.value if task.notices else None

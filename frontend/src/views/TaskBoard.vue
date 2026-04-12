@@ -41,7 +41,7 @@
         <div class="report-header">
           <h2 class="section-title">报告预览</h2>
           <router-link
-            v-if="workflow?.status === 'completed'"
+            v-if="canViewFullReport"
             :to="`/report/${workflowId}`"
             class="view-full-report"
           >
@@ -65,6 +65,7 @@ import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { useResearchStore } from '@/stores/research'
+import { mapWorkflowStatusToDisplay } from '@/types'
 import TaskCard from '@/components/TaskCard.vue'
 
 const route = useRoute()
@@ -83,18 +84,29 @@ const renderedMarkdown = computed(() => {
 
 const statusClass = computed(() => {
   const status = workflow.value?.status
-  if (status === 'completed') return 'success'
-  if (status === 'failed') return 'error'
-  if (status === 'running') return 'running'
+  if (!status) return 'pending'
+  const displayStatus = mapWorkflowStatusToDisplay(status)
+  if (displayStatus === 'completed') return 'success'
+  if (displayStatus === 'failed') return 'error'
+  if (displayStatus === 'running') return 'running'
   return 'pending'
 })
 
 const statusText = computed(() => {
   const status = workflow.value?.status
-  if (status === 'completed') return '已完成'
-  if (status === 'failed') return '失败'
-  if (status === 'running') return '运行中'
+  if (!status) return '等待中'
+  const displayStatus = mapWorkflowStatusToDisplay(status)
+  if (displayStatus === 'completed') return '已完成'
+  if (displayStatus === 'failed') return '失败'
+  if (displayStatus === 'running') return '运行中'
   return '等待中'
+})
+
+const canViewFullReport = computed(() => {
+  const status = workflow.value?.status
+  if (!status) return false
+  const displayStatus = mapWorkflowStatusToDisplay(status)
+  return displayStatus === 'completed'
 })
 
 onMounted(async () => {
@@ -102,6 +114,9 @@ onMounted(async () => {
     if (!researchStore.currentWorkflow || researchStore.currentWorkflow.workflowId !== workflowId) {
       await researchStore.fetchWorkflow(workflowId)
       researchStore.connectSSE(workflowId)
+    } else if (researchStore.currentWorkflow.reportUrl && !researchStore.reportContent) {
+      // 如果工作流已加载，有报告 URL 但没有报告内容，加载报告内容
+      await researchStore.fetchReportContent(workflowId)
     }
   }
 })

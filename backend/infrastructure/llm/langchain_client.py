@@ -2,11 +2,11 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
-from tenacity import stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
+from tenacity import stop_after_attempt, wait_exponential, retry_base, RetryError
 from tenacity.asyncio import AsyncRetrying
-from .base import LLMClient
-from infrastructure.config import get_settings
-from infrastructure.logger import logger
+from infrastructure.llm.base import LLMClient
+from common.config import get_settings
+from common.logger import logger
 
 settings = get_settings()
 
@@ -148,43 +148,43 @@ class LangChainClient(LLMClient):
         
         langchain_messages = self._convert_messages(messages)
         
-        # 使用异步重试机制
+        # 使用简单的重试机制
         # 策略：最多2次重试，指数退避（1s, 2s），最大等待5秒
-        retrying = AsyncRetrying(
-            stop=stop_after_attempt(2),  # 总共尝试2次（初始1次 + 重试1次）
-            wait=wait_exponential(multiplier=1, min=1, max=5),
-            retry=retry_if_exception_type((ConnectionError, TimeoutError)),
-            reraise=True
-        )
-        
+        max_attempts = 2
         last_error = None
-        async for attempt in retrying:
-            with attempt:
-                try:
-                    client = self._get_client(model=model, temperature=temperature)
-                    response = await client.ainvoke(langchain_messages)
+        
+        for attempt in range(max_attempts):
+            try:
+                client = self._get_client(model=model, temperature=temperature)
+                response = await client.ainvoke(langchain_messages)
+                
+                # 健壮性：处理各种异常响应
+                result = self._parse_response(response)
+                if result:
+                    logger.info(f"[LangChainClient] Chat completed successfully")
+                    return result
+                else:
+                    # 空响应，记录警告但继续重试
+                    logger.warning(f"[LangChainClient] Empty or invalid response, will retry")
+                    last_error = ValueError("Empty or invalid response from LLM API")
                     
-                    # 健壮性：处理各种异常响应
-                    result = self._parse_response(response)
-                    if result:
-                        logger.info(f"[LangChainClient] Chat completed successfully")
-                        return result
-                    else:
-                        # 空响应，记录警告但继续重试
-                        logger.warning(f"[LangChainClient] Empty or invalid response, will retry")
-                        raise ValueError("Empty or invalid response from LLM API")
-                        
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"[LangChainClient] Attempt failed: {str(e)}")
-                    
-                    # 判断是否应该重试
-                    if not self._is_retryable_error(e):
-                        logger.error(f"[LangChainClient] Non-retryable error, aborting: {str(e)}")
-                        raise
-                    
-                    # 继续重试
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[LangChainClient] Attempt {attempt + 1}/{max_attempts} failed: {str(e)}")
+                
+                # 判断是否应该重试
+                if not self._is_retryable_error(e):
+                    logger.error(f"[LangChainClient] Non-retryable error, aborting: {str(e)}")
                     raise
+            
+            # 如果不是最后一次尝试，等待后继续
+            if attempt < max_attempts - 1:
+                delay = min(1 * (2 ** attempt), 5)  # 指数退避
+                logger.warning(f"[LangChainClient] Retrying in {delay:.1f}s...")
+                import asyncio
+                await asyncio.sleep(delay)
+            else:
+                break
         
         # 所有重试都失败了
         logger.error(f"[LangChainClient] All retry attempts failed: {str(last_error)}")

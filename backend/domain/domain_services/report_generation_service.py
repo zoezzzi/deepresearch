@@ -6,7 +6,7 @@ from domain.entities.research_report import ResearchReport
 from domain.value_objects.workflow_id import WorkflowId
 from domain.value_objects.report_content import ReportContent
 from domain.value_objects.report_url import ReportUrl
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class ReportGenerationService:

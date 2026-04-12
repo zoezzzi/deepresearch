@@ -21,12 +21,44 @@ export const useResearchStore = defineStore('research', () => {
     pollingInterval.value = window.setInterval(async () => {
       try {
         const workflow = await researchApi.getWorkflow(workflowId)
+        const currentTasks = currentWorkflow.value?.tasks || []
+        let shouldUpdate = false
+        
+        // 检查工作流状态是否变化
+        if (currentWorkflow.value && workflow.status !== currentWorkflow.value.status) {
+          shouldUpdate = true
+        }
+        
+        // 检查报告 URL 是否出现
+        const hasNewReport = workflow.reportUrl && !currentWorkflow.value?.reportUrl
+        
+        // 检查任务数量或状态是否有变化
         if (workflow.tasks && workflow.tasks.length > 0) {
-          // 只在任务数量变化时更新
-          const currentTasks = currentWorkflow.value?.tasks || []
           if (workflow.tasks.length !== currentTasks.length) {
-            console.log(`[Polling] Task count changed from ${currentTasks.length} to ${workflow.tasks.length}`)
-            currentWorkflow.value = workflow
+            shouldUpdate = true
+          } else {
+            // 检查每个任务的状态是否变化
+            for (let i = 0; i < workflow.tasks.length; i++) {
+              const newTask = workflow.tasks[i]
+              const oldTask = currentTasks[i]
+              if (newTask.status !== oldTask.status || 
+                  newTask.summary !== oldTask.summary ||
+                  newTask.sourcesSummary !== oldTask.sourcesSummary ||
+                  newTask.notices !== oldTask.notices) {
+                shouldUpdate = true
+                break
+              }
+            }
+          }
+        }
+        
+        if (shouldUpdate || hasNewReport) {
+          console.log(`[Polling] Workflow updated, refreshing data`)
+          currentWorkflow.value = workflow
+          
+          // 如果有新的报告 URL，加载报告内容
+          if (hasNewReport) {
+            await fetchReportContent(workflowId)
           }
         }
       } catch (err) {
@@ -75,11 +107,29 @@ export const useResearchStore = defineStore('research', () => {
       } else {
         console.log(`[ResearchStore] No tasks found for workflow ${workflowId}, waiting for plan event...`)
       }
+      
+      // 如果有报告 URL，加载报告内容
+      if (workflow.reportUrl) {
+        await fetchReportContent(workflowId)
+      }
     } catch (err) {
       error.value = err instanceof Error ? err.message : '获取工作流失败'
       throw err
     } finally {
       isLoading.value = false
+    }
+  }
+  
+  async function fetchReportContent(workflowId: string): Promise<void> {
+    if (!currentWorkflow.value?.reportUrl) return
+    
+    try {
+      const content = await researchApi.getReportContent(workflowId)
+      if (currentWorkflow.value) {
+        currentWorkflow.value.reportContent = content
+      }
+    } catch (err) {
+      console.error('[ResearchStore] Failed to fetch report content:', err)
     }
   }
 
@@ -96,14 +146,16 @@ export const useResearchStore = defineStore('research', () => {
     })
 
     sseClient.on('task_start', (event) => {
-      updateTask(event.data.taskId, { status: 'running', startedAt: new Date().toISOString() })
+      const taskId = event.data.taskId || event.data.task_id
+      updateTask(taskId, { status: 'running', startedAt: new Date().toISOString() })
     })
 
     sseClient.on('task_complete', (event) => {
-      updateTask(event.data.taskId, {
+      const taskId = event.data.taskId || event.data.task_id
+      updateTask(taskId, {
         status: 'completed',
         summary: event.data.summary,
-        sourcesSummary: event.data.sourcesSummary,
+        sourcesSummary: event.data.sourcesSummary || event.data.sources_summary,
         notices: event.data.notices,
         completedAt: new Date().toISOString()
       })
@@ -115,10 +167,12 @@ export const useResearchStore = defineStore('research', () => {
       }
     })
 
-    sseClient.on('result', (event) => {
+    sseClient.on('result', async (event) => {
       if (currentWorkflow.value) {
-        currentWorkflow.value.status = 'completed'
+        currentWorkflow.value.status = 'all_success'
         currentWorkflow.value.reportUrl = event.data.reportUrl
+        // 收到 result 事件后，加载报告内容
+        await fetchReportContent(workflowId)
       }
       stopPolling()
       sseClient.disconnect()
@@ -126,7 +180,7 @@ export const useResearchStore = defineStore('research', () => {
 
     sseClient.on('error', (event) => {
       if (currentWorkflow.value) {
-        currentWorkflow.value.status = 'failed'
+        currentWorkflow.value.status = 'all_failed'
       }
       error.value = event.data.message
       stopPolling()
@@ -170,6 +224,7 @@ export const useResearchStore = defineStore('research', () => {
     reportContent,
     createResearch,
     fetchWorkflow,
+    fetchReportContent,
     connectSSE,
     disconnectSSE,
     reset,

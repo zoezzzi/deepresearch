@@ -2,9 +2,9 @@ from typing import List, Dict, Any
 from tavily import TavilyClient
 from tenacity import stop_after_attempt, wait_exponential, retry_if_exception_type
 from tenacity.asyncio import AsyncRetrying
-from .base import SearchSource, SearchResult
-from infrastructure.config import get_settings
-from infrastructure.logger import logger
+from infrastructure.search.base import SearchSource, SearchResult
+from common.config import get_settings
+from common.logger import logger
 
 settings = get_settings()
 

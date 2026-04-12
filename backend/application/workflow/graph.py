@@ -12,7 +12,7 @@ from domain.entities.task import Task
 from domain.repositories.task_repository import TaskRepository
 from application.events.event_publisher import EventPublisher
 from infrastructure.storage.base import ObjectStorage
-from infrastructure.logger import logger
+from common.logger import logger
 from common.utils.time_utils import get_current_utc_time
 
 
@@ -147,7 +147,9 @@ class ResearchWorkflowGraph:
                 workflow_id=state["workflow_id"],
                 task_id=current_task["task_id"],
                 task_title=current_task["title"],
-                summary=summary.value
+                summary=summary.value,
+                sources_summary=sources_summary.value,
+                notices=notices.value
             )
 
             # 更新内存状态
@@ -210,19 +212,54 @@ class ResearchWorkflowGraph:
         return "continue"
 
     async def _generate_report_node(self, state: WorkflowState) -> Dict[str, Any]:
+        """
+        生成报告节点
+        
+        根据任务执行结果和报告生成情况，设置工作流完成状态：
+        1. ALL_SUCCESS: 全部任务成功，报告生成成功
+        2. PARTIAL_FAILED: 部分任务失败，报告生成成功
+        3. ALL_FAILED: 全部任务失败，不生成报告
+        4. REPORT_FAILED: 全部任务成功，但报告生成失败
+        """
         logger.info(f"[Workflow] Generating report for workflow {state['workflow_id']}")
         
-        if state.get("error"):
+        # 统计任务执行结果
+        tasks = state.get("tasks", [])
+        total_tasks = len(tasks)
+        completed_tasks = sum(1 for t in tasks if t.get("status") == "completed")
+        failed_tasks = sum(1 for t in tasks if t.get("status") == "failed")
+        
+        logger.info(f"[Workflow] Task summary: {completed_tasks}/{total_tasks} completed, {failed_tasks} failed")
+        
+        # 构建任务摘要
+        task_summary = {
+            "total": total_tasks,
+            "completed": completed_tasks,
+            "failed": failed_tasks
+        }
+        
+        # 情况3：全部任务失败或空任务列表，不生成报告
+        if total_tasks == 0 or failed_tasks == total_tasks:
+            logger.info(f"[Workflow] All tasks failed or no tasks, skipping report generation")
             return {
                 "report_content": None,
                 "report_url": None,
+                "workflow_status": "all_failed",
+                "task_summary": task_summary,
                 "updated_at": get_current_utc_time()
             }
-
+        
+        # 尝试生成报告
+        report_generated = False
+        report_content = None
+        report_url = None
+        report_error = None
+        
         try:
             workflow_id = WorkflowId(state["workflow_id"])
             
-            tasks = []
+            # 构建任务列表
+            task_entities = []
             for task_dict, result_dict in zip(state["tasks"], state["task_results"]):
                 task = Task(
                     task_id=TaskId(task_dict["task_id"]),
@@ -232,19 +269,22 @@ class ResearchWorkflowGraph:
                     query=SearchQuery(task_dict["query"]),
                     order=task_dict["order"]
                 )
-                tasks.append(task)
+                task_entities.append(task)
 
             report = await self.report_generation_service.generate_report(
                 workflow_id=workflow_id,
                 topic=state["topic"],
-                tasks=tasks
+                tasks=task_entities
             )
+            report_content = report.content.value
+            report_generated = True
 
-            report_url = None
+            # 保存报告到存储
             try:
                 logger.info(f"[Workflow] Saving report to storage")
                 report_content_bytes = report.content.value.encode("utf-8")
-                report_filename = f"{report.report_id}.md"
+                # 使用 workflow_id 作为文件名，便于后续查找
+                report_filename = f"{state['workflow_id']}.md"
                 report_url = await self.object_storage.upload_object(
                     bucket_name="reports",
                     object_name=report_filename,
@@ -253,29 +293,51 @@ class ResearchWorkflowGraph:
                 )
                 logger.info(f"[Workflow] Report saved to storage: {report_url}")
             except Exception as storage_error:
-                logger.error(f"[Workflow] Failed to save report to storage: {storage_error}, but returning generated report")
+                logger.error(f"[Workflow] Failed to save report to storage: {storage_error}")
+                # 报告生成成功但保存失败，仍视为报告生成成功
+                report_url = f"/reports/{state['workflow_id']}"  # 提供默认URL
 
             await self.event_publisher.publish_result_event(
                 workflow_id=state["workflow_id"],
                 report_url=report_url
             )
 
-            logger.info(f"[Workflow] Report generated and saved: {report_url}")
-            return {
-                "report_content": report.content.value,
-                "report_url": report_url,
-                "updated_at": get_current_utc_time()
-            }
         except Exception as e:
-            logger.error(f"[Workflow] Report generation failed: {str(e)}")
+            report_error = str(e)
+            logger.error(f"[Workflow] Report generation failed: {report_error}")
             await self.event_publisher.publish_error_event(
                 workflow_id=state["workflow_id"],
-                message=f"Report generation failed: {str(e)}"
+                message=f"Report generation failed: {report_error}"
             )
-            return {
-                "error": str(e),
-                "updated_at": get_current_utc_time()
-            }
+        
+        # 根据结果设置工作流状态
+        if report_generated:
+            # 报告生成成功
+            if completed_tasks == total_tasks:
+                workflow_status = "all_success"  # 情况1：全部任务成功，报告生成成功
+            else:
+                workflow_status = "partial_failed"  # 情况2：部分任务失败，报告生成成功
+        else:
+            # 报告生成失败
+            if completed_tasks == total_tasks:
+                workflow_status = "report_failed"  # 情况4：全部任务成功，但报告生成失败
+            else:
+                workflow_status = "partial_failed"  # 部分失败且报告失败
+        
+        logger.info(f"[Workflow] Workflow completed with status: {workflow_status}")
+        
+        result = {
+            "report_content": report_content,
+            "report_url": report_url,
+            "workflow_status": workflow_status,
+            "task_summary": task_summary,
+            "updated_at": get_current_utc_time()
+        }
+        
+        if report_error:
+            result["error"] = report_error
+            
+        return result
 
     @property
     def graph(self):

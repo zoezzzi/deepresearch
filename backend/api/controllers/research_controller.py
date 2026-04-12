@@ -12,7 +12,7 @@ from api.models import (
 from api.dependencies import get_research_application_service_dep, get_sse_manager_dep
 from application import ResearchApplicationService
 from infrastructure.sse.manager import SSEConnectionManager, SSEEvent
-from infrastructure.logger import logger
+from common.logger import logger
 
 router = APIRouter(prefix="/research", tags=["research"])
 
@@ -150,4 +150,35 @@ async def download_report(
     except Exception as e:
         logger.error(f"Error downloading report: {e}")
         raise HTTPException(status_code=500, detail="Failed to download report")
+
+
+@router.get("/{workflow_id}/report-content")
+async def get_report_content(
+    workflow_id: str,
+    application_service: ResearchApplicationService = Depends(get_research_application_service_dep)
+):
+    """获取工作流的报告内容"""
+    try:
+        logger.info(f"获取报告内容: {workflow_id}")
+        workflow_uuid = UUID(workflow_id)
+        
+        content = await application_service.get_report_content(workflow_uuid)
+        
+        if content is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        return {"content": content}
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error_code="INVALID_WORKFLOW_ID",
+                message="无效的工作流 ID"
+            ).dict()
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取报告内容失败: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get report content")
 

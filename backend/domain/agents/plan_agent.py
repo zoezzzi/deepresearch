@@ -2,7 +2,7 @@ from typing import List, Dict, Any
 from .base import Agent
 from domain.value_objects.task_intent import TaskIntent
 from domain.value_objects.search_query import SearchQuery
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class PlanAgent(Agent):

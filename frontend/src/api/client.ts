@@ -48,6 +48,11 @@ export const researchApi = {
   getWorkflow: async (workflowId: string): Promise<ResearchWorkflow> => {
     const response = await apiClient.get(`/research/${workflowId}`)
     return transformWorkflowFromBackend(response.data)
+  },
+
+  getReportContent: async (workflowId: string): Promise<string> => {
+    const response = await apiClient.get(`/research/${workflowId}/report-content`)
+    return response.data.content
   }
 }
 

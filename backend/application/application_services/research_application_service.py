@@ -3,6 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
 from uuid import UUID
+from fastapi import HTTPException
+
 from application.dtos import (
     CreateResearchRequest,
     WorkflowResponse,
@@ -26,9 +28,10 @@ from domain.agents.generate_agent import GenerateAgent
 from infrastructure.llm.factory import get_llm_client
 from infrastructure.search.factory import get_search_source
 from infrastructure.storage.local_storage import LocalObjectStorage
-from infrastructure.config import get_settings
-from infrastructure.logger import logger
+from common.config import get_settings
+from common.logger import logger
 from common.utils.time_utils import get_current_utc_time
+from common.exceptions import CheckpointConnectionError
 
 settings = get_settings()
 
@@ -124,8 +127,8 @@ class ResearchApplicationService:
         }
         
         try:
-            # 获取 saver 实例
-            checkpointer = await self.saver_manager.get_saver()
+            # 获取 saver 实例（带重试机制）
+            checkpointer = await self.saver_manager.get_saver(thread_id=workflow_id_str)
             
             await self.workflow_graph.graph.ainvoke(
                 initial_state,
@@ -140,6 +143,33 @@ class ResearchApplicationService:
             await self._force_update_workflow_to_database(workflow)
             
             logger.info(f"[ResearchApplicationService] Workflow execution completed: {workflow_id}")
+        except CheckpointConnectionError as e:
+            # 处理 Checkpoint 连接错误
+            logger.error(
+                f"[ResearchApplicationService] Checkpoint connection failed | "
+                f"workflow_id={workflow_id_str} | "
+                f"error={e.message} | "
+                f"retries={e.retry_count}",
+                exc_info=True
+            )
+            workflow.fail()
+            try:
+                await self.workflow_repository.update(workflow)
+            except Exception as db_error:
+                logger.error(f"[ResearchApplicationService] Failed to update workflow in database after checkpoint error: {db_error}")
+            await self.event_publisher.publish_error_event(
+                workflow_id=workflow_id,
+                message="工作流状态存储不可用，请稍后重试"
+            )
+            # 抛出 HTTPException 给上层处理
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "CHECKPOINT_CONNECTION_ERROR",
+                    "message": "无法访问工作流状态存储，请稍后重试",
+                    "workflow_id": workflow_id_str
+                }
+            ) from e
         except Exception as e:
             logger.error(f"[ResearchApplicationService] Workflow execution failed: {str(e)}")
             workflow.fail()
@@ -200,13 +230,15 @@ class ResearchApplicationService:
         """
         基于数据库任务完成情况计算状态
         【增强版】补充从存储系统查询 report_url
+        【关键修复】根据任务和报告情况计算 workflow_status
         """
         try:
             tasks = await self.task_repository.find_by_workflow_id(workflow_id_str)
             completed_count = sum(1 for task in tasks if (task.status.value if hasattr(task.status, 'value') else task.status) == "completed")
+            failed_count = sum(1 for task in tasks if (task.status.value if hasattr(task.status, 'value') else task.status) == "failed")
             total_count = len(tasks)
 
-            logger.info(f"[ResearchApplicationService] Tasks: {completed_count}/{total_count} completed from database")
+            logger.info(f"[ResearchApplicationService] Tasks: {completed_count}/{total_count} completed, {failed_count} failed from database")
 
             # 【关键修复】从存储系统查询已生成的报告 URL
             report_url = None
@@ -217,7 +249,41 @@ class ResearchApplicationService:
             except Exception as storage_error:
                 logger.warning(f"[ResearchApplicationService] Failed to get report URL from storage: {storage_error}")
 
+            # 【关键修复】根据任务和报告情况计算 workflow_status
+            workflow_status = None
+            has_report = report_url is not None
+            
+            task_summary = {
+                "total": total_count,
+                "completed": completed_count,
+                "failed": failed_count
+            }
+            
+            if total_count == 0 or failed_count == total_count:
+                # 情况3：全部任务失败，不生成报告
+                workflow_status = "all_failed"
+            elif has_report:
+                # 报告生成成功
+                if completed_count == total_count:
+                    # 情况1：全部任务成功，报告生成成功
+                    workflow_status = "all_success"
+                else:
+                    # 情况2：部分任务失败，报告生成成功
+                    workflow_status = "partial_failed"
+            else:
+                # 报告生成失败
+                if completed_count == total_count:
+                    # 情况4：全部任务成功，但报告生成失败
+                    workflow_status = "report_failed"
+                else:
+                    # 部分失败且报告失败
+                    workflow_status = "partial_failed"
+            
+            logger.info(f"[ResearchApplicationService] Calculated workflow_status: {workflow_status}")
+
             state = {
+                "workflow_status": workflow_status,
+                "task_summary": task_summary,
                 "report_url": report_url,
                 "error": None,
                 "tasks": tasks
@@ -231,59 +297,107 @@ class ResearchApplicationService:
     async def _update_workflow_state(self, workflow: Workflow, final_state: Optional[Dict[str, Any]], workflow_id_str: str):
         """
         从最终状态更新 workflow 对象
+        
+        根据新的工作流状态逻辑更新：
+        - all_success: 全部任务成功，报告生成成功
+        - partial_failed: 部分任务失败，报告生成成功
+        - all_failed: 全部任务失败，不生成报告
+        - report_failed: 全部任务成功，但报告生成失败
         """
         if final_state:
+            # 获取新的工作流状态
+            workflow_status = final_state.get("workflow_status")
+            task_summary = final_state.get("task_summary", {})
             report_url = final_state.get("report_url")
             error = final_state.get("error")
             
+            logger.info(f"[ResearchApplicationService] Workflow status from state: {workflow_status}")
+            logger.info(f"[ResearchApplicationService] Task summary: {task_summary}")
             logger.info(f"[ResearchApplicationService] Report URL: {report_url}")
             logger.info(f"[ResearchApplicationService] Error: {error}")
             
-            if report_url:
+            # 根据新的状态值更新工作流
+            if workflow_status:
                 from domain.value_objects.report_url import ReportUrl
-                workflow.complete(ReportUrl(report_url))
-            elif error:
-                workflow.fail()
-            else:
-                logger.warning("[ResearchApplicationService] No report_url and no error, checking tasks for completion")
-                tasks = final_state.get("tasks", [])
-                completed_count = 0
-                failed_count = 0
-                total_count = len(tasks)
                 
-                if hasattr(tasks, "__len__") and total_count > 0:
-                    if hasattr(tasks[0], "get"):
-                        completed_count = sum(1 for t in tasks if t.get("status") == "completed")
-                        failed_count = sum(1 for t in tasks if t.get("status") == "failed")
-                    else:
-                        completed_count = sum(1 for t in tasks if (t.status.value if hasattr(t.status, 'value') else t.status) == "completed")
-                        failed_count = sum(1 for t in tasks if (t.status.value if hasattr(t.status, 'value') else t.status) == "failed")
-                
-                logger.info(f"[ResearchApplicationService] Tasks: {completed_count}/{total_count} completed, {failed_count}/{total_count} failed in state")
-                
-                if completed_count > 0 and completed_count == total_count:
-                    # 所有任务都完成
-                    from domain.value_objects.report_url import ReportUrl
-                    workflow.complete(ReportUrl(f"/reports/{workflow_id_str}"))
-                elif failed_count > 0 and completed_count == 0:
-                    # 所有任务都失败
-                    workflow.fail()
-                    logger.warning(f"[ResearchApplicationService] All tasks failed, marking workflow as failed")
-                elif completed_count > 0 and failed_count > 0:
-                    # 部分任务完成，部分失败 - 生成部分报告
-                    from domain.value_objects.report_url import ReportUrl
-                    workflow.complete(ReportUrl(f"/reports/{workflow_id_str}"))
-                    logger.info(f"[ResearchApplicationService] Partial completion: {completed_count}/{total_count} tasks completed, generating partial report")
-                elif total_count == 0:
-                    # 没有任务
-                    workflow.fail()
-                    logger.warning(f"[ResearchApplicationService] No tasks found in state, marking workflow as failed")
+                if workflow_status == "all_success":
+                    # 情况1：全部任务成功，报告生成成功
+                    workflow.mark_all_success(ReportUrl(report_url) if report_url else None)
+                    logger.info(f"[ResearchApplicationService] Workflow {workflow_id_str} marked as ALL_SUCCESS")
+                    
+                elif workflow_status == "partial_failed":
+                    # 情况2：部分任务失败，报告生成成功
+                    workflow.mark_partial_failed(ReportUrl(report_url) if report_url else None)
+                    logger.info(f"[ResearchApplicationService] Workflow {workflow_id_str} marked as PARTIAL_FAILED")
+                    
+                elif workflow_status == "all_failed":
+                    # 情况3：全部任务失败，不生成报告
+                    workflow.mark_all_failed()
+                    logger.info(f"[ResearchApplicationService] Workflow {workflow_id_str} marked as ALL_FAILED")
+                    
+                elif workflow_status == "report_failed":
+                    # 情况4：全部任务成功，但报告生成失败
+                    workflow.mark_report_failed()
+                    logger.info(f"[ResearchApplicationService] Workflow {workflow_id_str} marked as REPORT_FAILED")
+                    
                 else:
-                    # 任务仍在进行中
-                    logger.warning(f"[ResearchApplicationService] Workflow still in progress: {completed_count}/{total_count} tasks completed")
+                    # 未知状态，使用兼容逻辑
+                    logger.warning(f"[ResearchApplicationService] Unknown workflow status: {workflow_status}, using fallback logic")
+                    self._update_workflow_fallback(workflow, final_state, workflow_id_str)
+            else:
+                # 没有 workflow_status，使用兼容逻辑
+                logger.warning("[ResearchApplicationService] No workflow_status in final state, using fallback logic")
+                self._update_workflow_fallback(workflow, final_state, workflow_id_str)
         else:
             logger.warning("[ResearchApplicationService] No final state available, checking database tasks")
             await self._update_workflow_from_database(workflow, workflow_id_str)
+    
+    def _update_workflow_fallback(self, workflow: Workflow, final_state: Dict[str, Any], workflow_id_str: str):
+        """
+        兼容旧逻辑的状态更新（fallback）
+        现在只使用新的详细状态方法
+        """
+        report_url = final_state.get("report_url")
+        error = final_state.get("error")
+        
+        from domain.value_objects.report_url import ReportUrl
+        
+        if report_url:
+            workflow.mark_all_success(ReportUrl(report_url) if report_url else None)
+        elif error:
+            workflow.mark_all_failed()
+        else:
+            # 检查任务状态（兼容 Task 对象和字典）
+            tasks = final_state.get("tasks", [])
+            completed_count = 0
+            failed_count = 0
+            total_count = len(tasks)
+            
+            for t in tasks:
+                # 处理 Task 对象
+                if hasattr(t, 'status'):
+                    status_value = t.status.value if hasattr(t.status, 'value') else str(t.status)
+                # 处理字典
+                elif isinstance(t, dict):
+                    status_value = t.get("status", "")
+                else:
+                    continue
+                    
+                if status_value == "completed":
+                    completed_count += 1
+                elif status_value == "failed":
+                    failed_count += 1
+            
+            if completed_count > 0 and completed_count == total_count:
+                workflow.mark_all_success(ReportUrl(f"/reports/{workflow_id_str}"))
+            elif failed_count > 0 and completed_count == 0:
+                workflow.mark_all_failed()
+            elif completed_count > 0 and failed_count > 0:
+                workflow.mark_partial_failed(ReportUrl(f"/reports/{workflow_id_str}"))
+            elif total_count == 0:
+                workflow.mark_all_failed()
+            else:
+                logger.warning(f"[ResearchApplicationService] Workflow still in progress")
 
     async def _force_update_workflow_to_database(self, workflow: Workflow):
         """
@@ -417,3 +531,35 @@ class ResearchApplicationService:
         
         logger.info(f"Report file path resolved: {safe_file_path}")
         return safe_file_path
+    
+    async def get_report_content(self, workflow_id: Union[str, UUID]) -> Optional[str]:
+        """
+        获取工作流的报告内容
+        
+        Args:
+            workflow_id: 工作流 ID
+            
+        Returns:
+            报告内容字符串，如果未找到则返回 None
+        """
+        workflow_id_str = str(workflow_id)
+        logger.info(f"[ResearchApplicationService] Getting report content for workflow: {workflow_id_str}")
+        
+        workflow = await self.workflow_repository.find_by_id(workflow_id_str)
+        
+        if not workflow or not workflow.report_url:
+            logger.warning(f"[ResearchApplicationService] Workflow or report_url not found: {workflow_id_str}")
+            return None
+        
+        # 从对象存储中读取报告内容
+        try:
+            report_url_value = workflow.report_url.value
+            # 从 /reports/{id} 中提取 report_id
+            report_id = report_url_value.split("/")[-1]
+            
+            logger.info(f"[ResearchApplicationService] Reading report file: {report_id}")
+            content = await self.object_storage.read_file(report_id)
+            return content
+        except Exception as e:
+            logger.error(f"[ResearchApplicationService] Failed to read report content: {e}")
+            return None

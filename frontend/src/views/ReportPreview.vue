@@ -9,8 +9,8 @@
         </p>
       </div>
       <div class="header-actions">
-        <button v-if="workflow?.reportUrl" class="download-button" @click="downloadReport">
-          下载报告
+        <button v-if="workflow?.reportUrl" class="download-button" @click="downloadReport" :disabled="downloading">
+          {{ downloading ? '下载中...' : '下载报告' }}
         </button>
       </div>
     </div>
@@ -40,7 +40,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { marked } from 'marked'
 import { useResearchStore } from '@/stores/research'
@@ -48,6 +48,7 @@ import { useResearchStore } from '@/stores/research'
 const route = useRoute()
 const researchStore = useResearchStore()
 const workflowId = route.params.workflowId as string
+const downloading = ref(false)
 
 const workflow = computed(() => researchStore.currentWorkflow)
 const reportContent = computed(() => researchStore.reportContent)
@@ -59,15 +60,37 @@ const renderedMarkdown = computed(() => {
 })
 
 function downloadReport() {
-  if (workflow.value?.reportUrl) {
-    window.open(workflow.value.reportUrl, '_blank')
-  }
+  if (!workflow.value?.reportUrl) return
+  
+  downloading.value = true
+  
+  // 创建临时 a 标签触发下载
+  const link = document.createElement('a')
+  link.href = workflow.value.reportUrl
+  link.download = `report-${workflowId}.md`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  
+  // 添加用户提示
+  setTimeout(() => {
+    showMessage('报告已开始下载', 'success')
+    downloading.value = false
+  }, 500)
+}
+
+function showMessage(text: string, type: 'success' | 'error' = 'success') {
+  console.log(`${type.toUpperCase()}: ${text}`)
+  alert(text)
 }
 
 onMounted(async () => {
   if (workflowId) {
     if (!researchStore.currentWorkflow || researchStore.currentWorkflow.workflowId !== workflowId) {
       await researchStore.fetchWorkflow(workflowId)
+    } else if (researchStore.currentWorkflow.reportUrl && !researchStore.reportContent) {
+      // 如果工作流已加载但报告内容未加载，加载报告内容
+      await researchStore.fetchReportContent(workflowId)
     }
   }
 })
@@ -137,6 +160,13 @@ onMounted(async () => {
 .download-button:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.download-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .error-alert {

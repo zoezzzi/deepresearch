@@ -7,7 +7,7 @@ from domain.value_objects.workflow_id import WorkflowId
 from domain.value_objects.workflow_status import WorkflowStatus
 from domain.value_objects.report_url import ReportUrl
 from infrastructure.db.models import WorkflowModel, TaskModel
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class WorkflowRepositoryImpl(WorkflowRepository):
@@ -63,7 +63,7 @@ class WorkflowRepositoryImpl(WorkflowRepository):
             workflow_id=str(workflow.workflow_id.value),
             topic=workflow.topic,
             description=workflow.description,
-            status=workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status),
+            status=workflow.status,
             report_url=workflow.report_url.value if workflow.report_url else None,
             created_at=workflow.created_at,
             updated_at=workflow.updated_at,
@@ -93,7 +93,7 @@ class WorkflowRepositoryImpl(WorkflowRepository):
         if model:
             model.topic = workflow.topic
             model.description = workflow.description
-            model.status = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
+            model.status = workflow.status
             model.report_url = workflow.report_url.value if workflow.report_url else None
             model.updated_at = workflow.updated_at
             model.started_at = workflow.started_at

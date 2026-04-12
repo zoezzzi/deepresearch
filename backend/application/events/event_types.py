@@ -26,6 +26,8 @@ class TaskCompleteEvent:
     task_id: str
     task_title: str
     summary: str
+    sources_summary: str
+    notices: str
     timestamp: datetime
     event_type: str = "task_complete"
 

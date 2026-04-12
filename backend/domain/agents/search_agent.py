@@ -1,7 +1,7 @@
 from typing import List
 from .base import Agent
 from domain.value_objects.search_query import SearchQuery
-from infrastructure.logger import logger
+from common.logger import logger
 
 
 class SearchAgent(Agent):
