@@ -42,7 +42,7 @@ class LangChainClient(LLMClient):
             'timeout': self.timeout
         }
         
-        logger.info(f"LangChainClient initialized with model: {self.model}")
+        logger.debug(f"LangChainClient initialized with model: {self.model}")
     
     def _get_client(self, **override_params) -> ChatOpenAI:
         """

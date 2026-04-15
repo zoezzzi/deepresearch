@@ -1,9 +1,11 @@
 from typing import Dict, Any, List
+import asyncio
 from langgraph.graph import StateGraph, END
 from .state import WorkflowState
 from domain.domain_services.research_plan_service import ResearchPlanService
 from domain.domain_services.task_execution_service import TaskExecutionService
 from domain.domain_services.report_generation_service import ReportGenerationService
+from domain.domain_services.evaluation_service import EvaluationService
 from domain.value_objects.workflow_id import WorkflowId
 from domain.value_objects.task_id import TaskId
 from domain.value_objects.task_intent import TaskIntent
@@ -11,7 +13,9 @@ from domain.value_objects.search_query import SearchQuery
 from domain.entities.task import Task
 from domain.repositories.task_repository import TaskRepository
 from application.events.event_publisher import EventPublisher
+from application.tasks.evaluation_task import run_evaluation_task
 from infrastructure.storage.base import ObjectStorage
+from infrastructure.evaluation.orchestrator import EvaluationOrchestrator
 from common.logger import logger
 from common.utils.time_utils import get_current_utc_time
 
@@ -24,7 +28,9 @@ class ResearchWorkflowGraph:
         report_generation_service: ReportGenerationService,
         event_publisher: EventPublisher,
         task_repository: TaskRepository,
-        object_storage: ObjectStorage
+        object_storage: ObjectStorage,
+        evaluation_service: EvaluationService,
+        evaluation_orchestrator: EvaluationOrchestrator
     ):
         self.research_plan_service = research_plan_service
         self.task_execution_service = task_execution_service
@@ -32,6 +38,8 @@ class ResearchWorkflowGraph:
         self.event_publisher = event_publisher
         self.task_repository = task_repository
         self.object_storage = object_storage
+        self.evaluation_service = evaluation_service
+        self.evaluation_orchestrator = evaluation_orchestrator
         self._graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
@@ -89,11 +97,17 @@ class ResearchWorkflowGraph:
                 tasks=task_dicts
             )
 
+            # 提取子问题用于评估
+            sub_questions = [task.title for task in tasks]
+
             logger.info(f"[Workflow] Plan generated with {len(task_dicts)} tasks")
             return {
                 "tasks": task_dicts,
                 "current_task_index": 0,
                 "task_results": [],
+                "sub_questions": sub_questions,
+                "retrieved_chunks": [],
+                "citations": [],
                 "updated_at": get_current_utc_time()
             }
         except Exception as e:
@@ -169,10 +183,17 @@ class ResearchWorkflowGraph:
                 # 不影响主流程，继续执行
 
             logger.info(f"[Workflow] Task {current_index + 1} completed")
+            
+            # 收集检索到的片段用于评估
+            retrieved_chunks = state.get("retrieved_chunks", [])
+            if sources_summary.value:
+                retrieved_chunks.append(sources_summary.value)
+            
             return {
                 "tasks": tasks,
                 "current_task_index": current_index + 1,
                 "task_results": state["task_results"] + [task_result],
+                "retrieved_chunks": retrieved_chunks,
                 "updated_at": get_current_utc_time()
             }
         except Exception as e:
@@ -220,6 +241,8 @@ class ResearchWorkflowGraph:
         2. PARTIAL_FAILED: 部分任务失败，报告生成成功
         3. ALL_FAILED: 全部任务失败，不生成报告
         4. REPORT_FAILED: 全部任务成功，但报告生成失败
+        
+        报告生成成功后，触发后台异步评估任务（不阻塞主工作流）
         """
         logger.info(f"[Workflow] Generating report for workflow {state['workflow_id']}")
         
@@ -238,6 +261,11 @@ class ResearchWorkflowGraph:
             "failed": failed_tasks
         }
         
+        # 收集评估所需数据
+        retrieved_chunks = state.get("retrieved_chunks", [])
+        sub_questions = state.get("sub_questions", [])
+        citations = state.get("citations", [])
+        
         # 情况3：全部任务失败或空任务列表，不生成报告
         if total_tasks == 0 or failed_tasks == total_tasks:
             logger.info(f"[Workflow] All tasks failed or no tasks, skipping report generation")
@@ -254,6 +282,7 @@ class ResearchWorkflowGraph:
         report_content = None
         report_url = None
         report_error = None
+        evaluation_id = None
         
         try:
             workflow_id = WorkflowId(state["workflow_id"])
@@ -301,6 +330,31 @@ class ResearchWorkflowGraph:
                 workflow_id=state["workflow_id"],
                 report_url=report_url
             )
+            
+            # 创建评估记录并触发异步评估任务
+            if report_generated:
+                try:
+                    logger.info(f"[Workflow] Creating evaluation record for workflow {state['workflow_id']}")
+                    evaluation = await self.evaluation_service.create_evaluation(workflow_id)
+                    evaluation_id = evaluation.evaluation_id
+                    
+                    # 触发后台异步评估任务
+                    asyncio.create_task(
+                        run_evaluation_task(
+                            evaluation_id=evaluation_id,
+                            workflow_id=state["workflow_id"],
+                            report=report_content,
+                            contexts=retrieved_chunks,
+                            question=state["topic"],
+                            sub_questions=sub_questions,
+                            citations=citations,
+                            evaluation_service=self.evaluation_service,
+                            evaluation_orchestrator=self.evaluation_orchestrator
+                        )
+                    )
+                    logger.info(f"[Workflow] Async evaluation task triggered: {evaluation_id}")
+                except Exception as eval_error:
+                    logger.error(f"[Workflow] Failed to trigger evaluation: {str(eval_error)}")
 
         except Exception as e:
             report_error = str(e)

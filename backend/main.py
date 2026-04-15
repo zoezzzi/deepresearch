@@ -1,3 +1,6 @@
+import asyncio
+import selectors
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,8 +9,13 @@ from common.config import get_settings
 from common.logger import logger
 from infrastructure.db.session import init_db
 from infrastructure.db.async_pool import init_connection_pool, close_connection_pool, get_pool_stats, check_pool_health
-from application.workflow import setup_checkpointer, get_saver_manager
+from core.workflow import setup_checkpointer, get_saver_manager
 from api.controllers import research_router
+
+# Windows 平台需要设置 SelectorEventLoop 以兼容 psycopg
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    logger.info("Windows 平台: 已设置 WindowsSelectorEventLoopPolicy")
 
 settings = get_settings()
 

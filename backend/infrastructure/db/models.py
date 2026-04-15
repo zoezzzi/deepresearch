@@ -1,8 +1,7 @@
-from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey, Float, JSON
 from sqlalchemy.orm import relationship
 from .session import Base
-from domain.value_objects.workflow_status import WorkflowStatus
-from domain.value_objects.task_status import TaskStatus
+from core.models.enums import WorkflowStatus, TaskStatus, EvaluationStatus
 from common.utils.time_utils import get_current_utc_time
 
 
@@ -20,6 +19,7 @@ class WorkflowModel(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     tasks = relationship("TaskModel", back_populates="workflow", cascade="all, delete-orphan", order_by="TaskModel.order")
+    evaluations = relationship("EvaluationModel", back_populates="workflow", cascade="all, delete-orphan")
 
 
 class TaskModel(Base):
@@ -41,3 +41,28 @@ class TaskModel(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     workflow = relationship("WorkflowModel", back_populates="tasks")
+
+
+class EvaluationModel(Base):
+    __tablename__ = "evaluation_results"
+
+    evaluation_id = Column(String, primary_key=True, index=True)
+    workflow_id = Column(String, ForeignKey("workflows.workflow_id"), nullable=False, index=True)
+    
+    faithfulness = Column(Float, nullable=True)
+    context_relevancy = Column(Float, nullable=True)
+    coverage = Column(Float, nullable=True)
+    structure = Column(Float, nullable=True)
+    professional_depth = Column(Float, nullable=True)
+    overall_score = Column(Float, nullable=True)
+    
+    status = Column(Enum(EvaluationStatus), default=EvaluationStatus.PENDING, nullable=False, index=True)
+    error_message = Column(Text, nullable=True)
+    evaluation_details = Column(JSON, nullable=True)
+    
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False, index=True)
+
+    workflow = relationship("WorkflowModel", back_populates="evaluations")

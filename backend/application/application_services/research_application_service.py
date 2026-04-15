@@ -19,6 +19,7 @@ from domain.value_objects.workflow_status import WorkflowStatus
 from domain.domain_services.research_plan_service import ResearchPlanService
 from domain.domain_services.task_execution_service import TaskExecutionService
 from domain.domain_services.report_generation_service import ReportGenerationService
+from domain.domain_services.evaluation_service import EvaluationService
 from domain.repositories.workflow_repository import WorkflowRepository
 from domain.repositories.task_repository import TaskRepository
 from domain.agents.plan_agent import PlanAgent
@@ -28,6 +29,7 @@ from domain.agents.generate_agent import GenerateAgent
 from infrastructure.llm.factory import get_llm_client
 from infrastructure.search.factory import get_search_source
 from infrastructure.storage.local_storage import LocalObjectStorage
+from infrastructure.evaluation.orchestrator import EvaluationOrchestrator
 from common.config import get_settings
 from common.logger import logger
 from common.utils.time_utils import get_current_utc_time
@@ -40,7 +42,9 @@ class ResearchApplicationService:
     def __init__(
         self,
         workflow_repository: WorkflowRepository,
-        task_repository: TaskRepository
+        task_repository: TaskRepository,
+        evaluation_service: EvaluationService,
+        evaluation_orchestrator: EvaluationOrchestrator
     ):
         self.workflow_repository = workflow_repository
         self.task_repository = task_repository
@@ -56,6 +60,8 @@ class ResearchApplicationService:
         self.research_plan_service = ResearchPlanService(plan_agent)
         self.task_execution_service = TaskExecutionService(search_agent, summarizer_agent)
         self.report_generation_service = ReportGenerationService(generate_agent)
+        self.evaluation_service = evaluation_service
+        self.evaluation_orchestrator = evaluation_orchestrator
         
         self.event_publisher = get_event_publisher()
         self.object_storage = LocalObjectStorage()
@@ -66,7 +72,9 @@ class ResearchApplicationService:
             report_generation_service=self.report_generation_service,
             event_publisher=self.event_publisher,
             task_repository=task_repository,
-            object_storage=self.object_storage
+            object_storage=self.object_storage,
+            evaluation_service=self.evaluation_service,
+            evaluation_orchestrator=self.evaluation_orchestrator
         )
         
         # 使用 AsyncPostgresSaverManager 进行状态持久化管理
@@ -411,7 +419,6 @@ class ResearchApplicationService:
 
     async def get_workflow_status(self, workflow_id: Union[str, UUID]) -> ResearchResponse:
         workflow_id_str = str(workflow_id)
-        logger.info(f"[ResearchApplicationService] Getting workflow status: {workflow_id_str}")
 
         workflow = await self.workflow_repository.find_by_id(workflow_id_str)
         if not workflow:
