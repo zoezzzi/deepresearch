@@ -51,8 +51,9 @@
 - **日志**: Loguru
 - **LLM**: 通义千问 (Qwen)
 - **搜索**: Tavily
-- **对象存储**: MinIO
+- **对象存储**: MinIO / 本地存储
 - **数据库**: PostgreSQL
+- **评估框架**: RAGAS (可选)
 
 **前端**
 - **框架**: Vue 3 + TypeScript
@@ -61,6 +62,10 @@
 - **状态管理**: Pinia
 - **HTTP 客户端**: Axios
 - **Markdown 渲染**: Marked
+
+**测试**
+- **单元测试**: Pytest
+- **前端测试**: Vitest
 
 ## 快速开始
 
@@ -181,47 +186,137 @@ research-assistant/
 ├── backend/
 │   ├── api/                          # 接口层
 │   │   ├── controllers/              # 控制器
+│   │   │   └── research_controller.py
 │   │   ├── models/                   # API 模型
 │   │   ├── dependencies.py           # 依赖注入
 │   │   └── __init__.py
 │   ├── application/                  # 应用层
-│   │   ├── application_services/    # 应用服务
+│   │   ├── application_services/     # 应用服务
+│   │   │   └── research_application_service.py
 │   │   ├── dtos/                     # 数据传输对象
-│   │   ├── workflow/                 # 工作流编排
+│   │   │   ├── create_research_request.py
+│   │   │   └── research_responses.py
+│   │   ├── workflow/                 # 工作流编排 (LangGraph)
+│   │   │   ├── graph.py              # 工作流图定义
+│   │   │   ├── saver.py              # 状态持久化
+│   │   │   └── state.py              # 工作流状态
 │   │   ├── events/                   # 事件发布
+│   │   │   ├── event_publisher.py
+│   │   │   └── event_types.py
+│   │   ├── tasks/                    # 异步任务
+│   │   │   └── evaluation_task.py    # 评估任务
+│   │   ├── service_factory.py        # 服务工厂
 │   │   └── __init__.py
 │   ├── domain/                       # 领域层
 │   │   ├── entities/                 # 领域实体
+│   │   │   ├── evaluation_result.py  # 评估结果实体
+│   │   │   ├── research_report.py
+│   │   │   ├── task.py
+│   │   │   └── workflow.py
 │   │   ├── value_objects/            # 值对象
+│   │   │   ├── evaluation_score.py   # 评估分值
+│   │   │   ├── evaluation_status.py  # 评估状态
+│   │   │   ├── workflow_id.py
+│   │   │   ├── workflow_status.py
+│   │   │   └── ...
 │   │   ├── aggregates/               # 聚合根
+│   │   │   └── research_workflow.py
 │   │   ├── domain_services/          # 领域服务
+│   │   │   ├── evaluation_service.py # 评估服务
+│   │   │   ├── report_generation_service.py
+│   │   │   ├── research_plan_service.py
+│   │   │   └── task_execution_service.py
 │   │   ├── agents/                   # Agent 实现
+│   │   │   ├── base.py
+│   │   │   ├── generate_agent.py
+│   │   │   ├── plan_agent.py
+│   │   │   ├── search_agent.py
+│   │   │   └── summarizer_agent.py
 │   │   ├── repositories/             # 仓储接口
+│   │   │   ├── evaluation_repository.py
+│   │   │   ├── task_repository.py
+│   │   │   └── workflow_repository.py
 │   │   └── __init__.py
 │   ├── infrastructure/               # 基础设施层
+│   │   ├── db/                       # 数据库
+│   │   │   ├── repositories/         # 仓储实现
+│   │   │   │   ├── evaluation_repository_impl.py
+│   │   │   │   ├── task_repository_impl.py
+│   │   │   │   └── workflow_repository_impl.py
+│   │   │   ├── async_pool.py         # 异步连接池
+│   │   │   ├── models.py             # 数据库模型
+│   │   │   └── session.py            # 会话管理
+│   │   ├── evaluation/               # 评估模块
+│   │   │   ├── base_evaluator.py     # 评估器基类
+│   │   │   ├── llm_judge_evaluator.py # LLM-as-Judge 评估器
+│   │   │   ├── orchestrator.py       # 评估编排器
+│   │   │   ├── ragas_evaluator.py    # RAGAS 评估器
+│   │   │   └── rule_evaluator.py     # 规则评估器
+│   │   ├── llm/                      # LLM 客户端
+│   │   │   ├── base.py
+│   │   │   ├── factory.py
+│   │   │   └── langchain_client.py
+│   │   ├── search/                   # 搜索源
+│   │   │   ├── base.py
+│   │   │   ├── factory.py
+│   │   │   └── tavily_source.py
+│   │   ├── sse/                      # SSE 管理器
+│   │   │   └── manager.py
+│   │   ├── storage/                  # 对象存储
+│   │   │   ├── base.py
+│   │   │   ├── local_storage.py
+│   │   │   └── minio_client.py
 │   │   ├── config.py                 # 配置管理
 │   │   ├── logger.py                 # 日志配置
-│   │   ├── db/                       # 数据库
-│   │   ├── sse/                      # SSE 管理器
-│   │   ├── llm/                      # LLM 客户端
-│   │   ├── search/                   # 搜索源
-│   │   ├── storage/                  # 对象存储
 │   │   └── __init__.py
+│   ├── tests/                        # 测试目录
+│   │   ├── domain/                   # 领域层测试
+│   │   │   ├── value_objects/        # 值对象测试
+│   │   │   ├── entities/             # 实体测试
+│   │   │   └── domain_services/      # 领域服务测试
+│   │   ├── infrastructure/           # 基础设施层测试
+│   │   │   ├── evaluation/           # 评估器测试
+│   │   │   └── db/repositories/      # 仓储测试
+│   │   ├── application/              # 应用层测试
+│   │   │   └── tasks/                # 任务测试
+│   │   └── integration/              # 集成测试
+│   │       └── test_evaluation_workflow.py
+│   ├── common/                       # 公共模块
+│   │   ├── utils/
+│   │   ├── config.py
+│   │   ├── exceptions.py
+│   │   └── logger.py
 │   ├── main.py                       # FastAPI 入口
-│   └── requirements.txt
+│   ├── requirements.txt              # 生产依赖
+│   └── requirements-test.txt         # 测试依赖
 ├── frontend/                         # 前端代码
 │   ├── src/
 │   │   ├── api/                      # API 客户端
+│   │   │   ├── client.ts
+│   │   │   └── sse.ts
 │   │   ├── components/               # 组件
+│   │   │   └── TaskCard.vue
 │   │   ├── router/                   # 路由
-│   │   ├── stores/                   # 状态管理
+│   │   │   └── index.ts
+│   │   ├── stores/                   # 状态管理 (Pinia)
+│   │   │   └── research.ts
+│   │   ├── types/                    # TypeScript 类型
+│   │   │   └── index.ts
 │   │   ├── views/                    # 页面
+│   │   │   ├── ResearchForm.vue
+│   │   │   ├── TaskBoard.vue
+│   │   │   └── ReportPreview.vue
 │   │   ├── App.vue
 │   │   └── main.ts
 │   ├── package.json
 │   └── vite.config.ts
-├── docker-compose.yml
-├── .env.example
+├── docs/                             # 文档目录
+│   └── 评估模块的技术设计方案.md
+├── docker-compose.yml                # Docker Compose 配置
+├── .env.example                      # 环境变量示例
+├── .trae/                            # Trae IDE 配置
+│   └── rules/                        # 编码规范
+├── pytest.ini                        # Pytest 配置
 └── README.md
 ```
 
@@ -251,6 +346,20 @@ research-assistant/
 1. 在 `infrastructure/search/` 中实现 `SearchSource` 接口
 2. 在 `infrastructure/search/factory.py` 中注册新的搜索源
 3. 在 `infrastructure/config.py` 中添加配置
+
+### 评估模块
+
+本项目集成了报告质量评估模块，包含 5 个评估指标：
+
+| 指标 | 说明 | 实现方式 |
+|------|------|----------|
+| Faithfulness | 事实一致性 | RAGAS |
+| Context Relevancy | 上下文相关性 | RAGAS |
+| Coverage | 覆盖度 | LLM-as-Judge |
+| Structure | 结构完整性 | LLM-as-Judge |
+| Professional Depth | 专业深度 | 规则评估 |
+
+评估在报告生成后**异步执行**，不影响前端响应。评估结果存储在数据库中，供开发人员分析。
 
 ## 许可证
 

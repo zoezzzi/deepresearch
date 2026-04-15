@@ -1,7 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from domain.repositories.task_repository import TaskRepository
-from domain.entities.task import Task
+from core.repositories import TaskRepository
+from core.models import Task
 from infrastructure.db.models import TaskModel
 from common.logger import logger
 
@@ -11,26 +11,19 @@ class TaskRepositoryImpl(TaskRepository):
         self.db_session = db_session
 
     def _to_domain_entity(self, model: TaskModel) -> Task:
-        from domain.value_objects.task_status import TaskStatus
-        from domain.value_objects.task_intent import TaskIntent
-        from domain.value_objects.search_query import SearchQuery
-        from domain.value_objects.task_id import TaskId
-        from domain.value_objects.workflow_id import WorkflowId
-        from domain.value_objects.task_summary import TaskSummary
-        from domain.value_objects.sources_summary import SourcesSummary
-        from domain.value_objects.notices import Notices
-        
+        from core.models.enums import TaskStatus
+
         return Task(
-            task_id=TaskId(str(model.task_id)),
-            workflow_id=WorkflowId(str(model.workflow_id)),
+            task_id=str(model.task_id),
+            workflow_id=str(model.workflow_id),
             title=model.title,
-            intent=TaskIntent(model.intent) if isinstance(model.intent, str) else model.intent,
-            query=SearchQuery(model.query) if isinstance(model.query, str) else model.query,
+            intent=model.intent,
+            query=model.query,
             order=model.order,
             status=TaskStatus(model.status) if isinstance(model.status, str) else model.status,
-            summary=TaskSummary(model.summary) if model.summary and isinstance(model.summary, str) else model.summary,
-            sources_summary=SourcesSummary(model.sources_summary) if model.sources_summary and isinstance(model.sources_summary, str) else model.sources_summary,
-            notices=Notices(model.notices) if model.notices and isinstance(model.notices, str) else model.notices,
+            summary=model.summary,
+            sources_summary=model.sources_summary,
+            notices=model.notices,
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
@@ -39,16 +32,16 @@ class TaskRepositoryImpl(TaskRepository):
 
     def _to_persistence_model(self, task: Task) -> TaskModel:
         return TaskModel(
-            task_id=task.task_id.value,
-            workflow_id=task.workflow_id.value,
+            task_id=task.task_id,
+            workflow_id=task.workflow_id,
             title=task.title,
-            intent=task.intent.value,
-            query=task.query.value,
+            intent=task.intent,
+            query=task.query,
             order=task.order,
             status=task.status,
-            summary=task.summary.value if task.summary else None,
-            sources_summary=task.sources_summary.value if task.sources_summary else None,
-            notices=task.notices.value if task.notices else None,
+            summary=task.summary,
+            sources_summary=task.sources_summary,
+            notices=task.notices,
             created_at=task.created_at,
             updated_at=task.updated_at,
             started_at=task.started_at,
@@ -83,16 +76,16 @@ class TaskRepositoryImpl(TaskRepository):
 
     async def update(self, task: Task) -> None:
         logger.info(f"Updating task: {task.task_id}")
-        model = self.db_session.query(TaskModel).filter_by(task_id=task.task_id.value).first()
+        model = self.db_session.query(TaskModel).filter_by(task_id=task.task_id).first()
         if model:
             model.title = task.title
-            model.intent = task.intent.value
-            model.query = task.query.value
+            model.intent = task.intent
+            model.query = task.query
             model.order = task.order
             model.status = task.status
-            model.summary = task.summary.value if task.summary else None
-            model.sources_summary = task.sources_summary.value if task.sources_summary else None
-            model.notices = task.notices.value if task.notices else None
+            model.summary = task.summary
+            model.sources_summary = task.sources_summary
+            model.notices = task.notices
             model.updated_at = task.updated_at
             model.started_at = task.started_at
             model.completed_at = task.completed_at

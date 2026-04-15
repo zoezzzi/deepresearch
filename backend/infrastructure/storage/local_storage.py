@@ -11,7 +11,7 @@ class LocalObjectStorage(ObjectStorage):
         settings = get_settings()
         self.storage_path = Path(storage_path or settings.REPORT_STORAGE_PATH)
         self.url_prefix = url_prefix or settings.REPORT_URL_PREFIX
-        logger.info(f"LocalObjectStorage initialized, storage path: {self.storage_path}")
+        logger.debug(f"LocalObjectStorage initialized, storage path: {self.storage_path}")
 
     async def ensure_bucket_exists(self, bucket_name: str) -> None:
         try:

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     LLM_MODEL_ID: str = "qwen-plus"
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
-    LLM_TIMEOUT: int = 60
+    LLM_TIMEOUT: int = 300  # 增加到 300 秒（5 分钟），报告生成需要更多时间
     LLM_TEMPERATURE: float = 0.7
     
     TAVILY_API_KEY: str = ""

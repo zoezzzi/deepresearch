@@ -23,6 +23,9 @@ class WorkflowState(TypedDict, total=False):
         updated_at: 更新时间
         workflow_status: 工作流完成状态 (all_success, partial_failed, all_failed, report_failed)
         task_summary: 任务执行摘要 {total, completed, failed}
+        retrieved_chunks: 检索到的上下文片段（用于评估）
+        sub_questions: 计划生成的子问题列表（用于评估）
+        citations: 报告中的引用列表（用于评估）
     """
     
     # 基础信息
@@ -49,3 +52,8 @@ class WorkflowState(TypedDict, total=False):
     # 新增：工作流完成状态
     workflow_status: Optional[str]  # all_success, partial_failed, all_failed, report_failed
     task_summary: Optional[Dict[str, int]]  # {total: int, completed: int, failed: int}
+    
+    # 评估相关数据（不暴露给前端）
+    retrieved_chunks: Optional[List[str]]
+    sub_questions: Optional[List[str]]
+    citations: Optional[List[str]]

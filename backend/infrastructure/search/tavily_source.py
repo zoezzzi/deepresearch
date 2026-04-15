@@ -13,7 +13,7 @@ class TavilySearchSource(SearchSource):
     def __init__(self):
         self.api_key = settings.TAVILY_API_KEY
         self.client = TavilyClient(api_key=self.api_key)
-        logger.info("TavilySearchSource initialized")
+        logger.debug("TavilySearchSource initialized")
 
     async def search(self, query: str, **kwargs) -> List[SearchResult]:
         max_results = kwargs.get("max_results", 5)

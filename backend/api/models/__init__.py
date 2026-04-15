@@ -1,7 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Optional
-from application.dtos.create_research_request import CreateResearchRequest
-from application.dtos.research_responses import (
+from core.models import (
+    CreateResearchRequest,
     WorkflowResponse,
     TaskResponse,
     ResearchResponse

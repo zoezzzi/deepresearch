@@ -29,7 +29,7 @@ class LLMFactory:
         
         if name not in cls._clients:
             raise ValueError(f"Unknown LLM client: {name}. Available: {list(cls._clients.keys())}")
-        logger.info(f"Creating LLM client: {name}")
+        logger.debug(f"Creating LLM client: {name}")
         return cls._clients[name]()
 
 

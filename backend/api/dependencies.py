@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 from contextlib import contextmanager
 
 from infrastructure.db.session import SessionLocal
-from application import (
+from core import (
     get_sse_manager,
-    create_research_application_service,
-    ResearchApplicationService
+    create_research_service,
+    ResearchService
 )
 from infrastructure.sse.manager import SSEConnectionManager
 
@@ -36,7 +36,7 @@ def get_db():
 def get_research_application_service_dep(
     db: Session = Depends(get_db)
 ):
-    return create_research_application_service(db)
+    return create_research_service(db)
 
 
 def get_sse_manager_dep():

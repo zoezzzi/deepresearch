@@ -1,11 +1,8 @@
 from typing import Optional
 from sqlalchemy.orm import Session
-from domain.repositories.workflow_repository import WorkflowRepository
-from domain.entities.workflow import Workflow
-from domain.entities.task import Task
-from domain.value_objects.workflow_id import WorkflowId
-from domain.value_objects.workflow_status import WorkflowStatus
-from domain.value_objects.report_url import ReportUrl
+from core.repositories import WorkflowRepository
+from core.models import Workflow, Task
+from core.models.enums import WorkflowStatus
 from infrastructure.db.models import WorkflowModel, TaskModel
 from common.logger import logger
 
@@ -16,11 +13,11 @@ class WorkflowRepositoryImpl(WorkflowRepository):
 
     def _to_domain_entity(self, model: WorkflowModel) -> Workflow:
         workflow = Workflow(
-            workflow_id=WorkflowId(model.workflow_id),
+            workflow_id=model.workflow_id,
             topic=model.topic,
             description=model.description,
             status=WorkflowStatus(model.status) if isinstance(model.status, str) else model.status,
-            report_url=ReportUrl(model.report_url) if model.report_url else None,
+            report_url=model.report_url,
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
@@ -32,26 +29,19 @@ class WorkflowRepositoryImpl(WorkflowRepository):
         return workflow
 
     def _task_to_domain_entity(self, model: TaskModel) -> Task:
-        from domain.value_objects.task_id import TaskId
-        from domain.value_objects.workflow_id import WorkflowId
-        from domain.value_objects.task_status import TaskStatus
-        from domain.value_objects.task_intent import TaskIntent
-        from domain.value_objects.search_query import SearchQuery
-        from domain.value_objects.task_summary import TaskSummary
-        from domain.value_objects.sources_summary import SourcesSummary
-        from domain.value_objects.notices import Notices
-        
+        from core.models.enums import TaskStatus
+
         return Task(
-            task_id=TaskId(str(model.task_id)),
-            workflow_id=WorkflowId(str(model.workflow_id)),
+            task_id=str(model.task_id),
+            workflow_id=str(model.workflow_id),
             title=model.title,
-            intent=TaskIntent(model.intent) if isinstance(model.intent, str) else model.intent,
-            query=SearchQuery(model.query) if isinstance(model.query, str) else model.query,
+            intent=model.intent,
+            query=model.query,
             order=model.order,
             status=TaskStatus(model.status) if isinstance(model.status, str) else model.status,
-            summary=TaskSummary(model.summary) if model.summary and isinstance(model.summary, str) else model.summary,
-            sources_summary=SourcesSummary(model.sources_summary) if model.sources_summary and isinstance(model.sources_summary, str) else model.sources_summary,
-            notices=Notices(model.notices) if model.notices and isinstance(model.notices, str) else model.notices,
+            summary=model.summary,
+            sources_summary=model.sources_summary,
+            notices=model.notices,
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
@@ -60,11 +50,11 @@ class WorkflowRepositoryImpl(WorkflowRepository):
 
     def _to_persistence_model(self, workflow: Workflow) -> WorkflowModel:
         return WorkflowModel(
-            workflow_id=str(workflow.workflow_id.value),
+            workflow_id=workflow.workflow_id,
             topic=workflow.topic,
             description=workflow.description,
             status=workflow.status,
-            report_url=workflow.report_url.value if workflow.report_url else None,
+            report_url=workflow.report_url,
             created_at=workflow.created_at,
             updated_at=workflow.updated_at,
             started_at=workflow.started_at,
@@ -79,7 +69,6 @@ class WorkflowRepositoryImpl(WorkflowRepository):
         self.db_session.commit()
 
     async def find_by_id(self, workflow_id: str) -> Optional[Workflow]:
-        logger.info(f"Finding workflow by id: {workflow_id}")
         workflow_id_str = str(workflow_id)
         model = self.db_session.query(WorkflowModel).filter_by(workflow_id=workflow_id_str).first()
         if not model:
@@ -94,7 +83,7 @@ class WorkflowRepositoryImpl(WorkflowRepository):
             model.topic = workflow.topic
             model.description = workflow.description
             model.status = workflow.status
-            model.report_url = workflow.report_url.value if workflow.report_url else None
+            model.report_url = workflow.report_url
             model.updated_at = workflow.updated_at
             model.started_at = workflow.started_at
             model.completed_at = workflow.completed_at

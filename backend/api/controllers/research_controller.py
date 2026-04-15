@@ -10,7 +10,7 @@ from api.models import (
     ErrorResponse
 )
 from api.dependencies import get_research_application_service_dep, get_sse_manager_dep
-from application import ResearchApplicationService
+from core import ResearchService
 from infrastructure.sse.manager import SSEConnectionManager, SSEEvent
 from common.logger import logger
 
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/research", tags=["research"])
 )
 async def create_research(
     request: CreateResearchRequest,
-    application_service: ResearchApplicationService = Depends(get_research_application_service_dep)
+    application_service: ResearchService = Depends(get_research_application_service_dep)
 ):
     try:
         logger.info(f"收到创建调研请求: {request.topic}")
@@ -61,7 +61,7 @@ async def create_research(
 )
 async def get_workflow_status(
     workflow_id: str,
-    application_service: ResearchApplicationService = Depends(get_research_application_service_dep)
+    application_service: ResearchService = Depends(get_research_application_service_dep)
 ):
     try:
         logger.info(f"获取工作流状态: {workflow_id}")
@@ -129,7 +129,7 @@ async def stream_workflow_events(
 @router.get("/reports/{report_id}")
 async def download_report(
     report_id: str,
-    application_service: ResearchApplicationService = Depends(get_research_application_service_dep)
+    application_service: ResearchService = Depends(get_research_application_service_dep)
 ):
     try:
         logger.info(f"Downloading report: {report_id}")
@@ -155,7 +155,7 @@ async def download_report(
 @router.get("/{workflow_id}/report-content")
 async def get_report_content(
     workflow_id: str,
-    application_service: ResearchApplicationService = Depends(get_research_application_service_dep)
+    application_service: ResearchService = Depends(get_research_application_service_dep)
 ):
     """获取工作流的报告内容"""
     try:

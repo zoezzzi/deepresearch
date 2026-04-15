@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from domain.value_objects.workflow_status import WorkflowStatus
 
@@ -24,7 +24,7 @@ class WorkflowResponse(BaseModel):
     workflow_id: str = Field(..., description="工作流ID")
     topic: str = Field(..., description="调研主题")
     description: Optional[str] = Field(None, description="调研描述")
-    status: WorkflowStatus = Field(..., description="工作流状态")
+    status: WorkflowStatus = Field(..., description="工作流状态 (all_success/partial_failed/all_failed/report_failed)")
     report_url: Optional[str] = Field(None, description="报告URL")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")

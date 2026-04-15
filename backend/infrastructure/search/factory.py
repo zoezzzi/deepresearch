@@ -18,7 +18,7 @@ class SearchSourceFactory:
     def create_source(cls, name: str = "tavily") -> SearchSource:
         if name not in cls._sources:
             raise ValueError(f"Unknown search source: {name}. Available: {list(cls._sources.keys())}")
-        logger.info(f"Creating search source: {name}")
+        logger.debug(f"Creating search source: {name}")
         return cls._sources[name]()
 
 

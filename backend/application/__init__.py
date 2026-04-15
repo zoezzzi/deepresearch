@@ -21,7 +21,9 @@ from .workflow import (
 )
 from .service_factory import (
     get_sse_manager,
-    create_research_application_service
+    create_research_application_service,
+    get_evaluation_orchestrator,
+    create_evaluation_service
 )
 
 __all__ = [
@@ -41,5 +43,7 @@ __all__ = [
     "WorkflowState",
     "ResearchWorkflowGraph",
     "get_sse_manager",
-    "create_research_application_service"
+    "create_research_application_service",
+    "get_evaluation_orchestrator",
+    "create_evaluation_service"
 ]
