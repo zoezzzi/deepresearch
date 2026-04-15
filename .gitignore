@@ -30,4 +30,7 @@ backend/requirements.in
 docs/
 scripts/
 
+pytest.ini
+requirements-test.txt
+
 

@@ -140,11 +140,13 @@ class LangChainClient(LLMClient):
         2. 合理的重试策略（最多2次重试，指数退避）
         3. 详细的错误日志
         4. 复用客户端连接
+        5. 支持自定义超时时间
         """
         model = kwargs.get("model", self.model)
         temperature = kwargs.get("temperature", self.temperature)
+        timeout = kwargs.get("timeout", self.timeout)
         
-        logger.info(f"[LangChainClient] Calling chat with model: {model}")
+        logger.info(f"[LangChainClient] Calling chat with model: {model}, timeout: {timeout}s")
         
         langchain_messages = self._convert_messages(messages)
         
@@ -155,7 +157,7 @@ class LangChainClient(LLMClient):
         
         for attempt in range(max_attempts):
             try:
-                client = self._get_client(model=model, temperature=temperature)
+                client = self._get_client(model=model, temperature=temperature, timeout=timeout)
                 response = await client.ainvoke(langchain_messages)
                 
                 # 健壮性：处理各种异常响应
