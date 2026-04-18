@@ -2,13 +2,9 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from contextlib import contextmanager
 
-from infrastructure.db.session import SessionLocal
-from core import (
-    get_sse_manager,
-    create_research_service,
-    ResearchService
-)
-from infrastructure.sse.manager import SSEConnectionManager
+from app.infrastructure.db.session import SessionLocal
+from app.scenarios.registry import ScenarioRegistry
+from harness.events.manager import SSEConnectionManager
 
 
 @contextmanager
@@ -25,7 +21,6 @@ def get_db_session():
 
 
 def get_db():
-    """FastAPI 兼容的数据库依赖函数"""
     db = SessionLocal()
     try:
         yield db
@@ -33,11 +28,10 @@ def get_db():
         db.close()
 
 
-def get_research_application_service_dep(
-    db: Session = Depends(get_db)
-):
-    return create_research_service(db)
+def get_scenario_registry() -> ScenarioRegistry:
+    return ScenarioRegistry
 
 
 def get_sse_manager_dep():
+    from app.service_factory import get_sse_manager
     return get_sse_manager()

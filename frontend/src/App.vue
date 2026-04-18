@@ -2,7 +2,7 @@
   <div id="app">
     <nav class="navbar">
       <div class="container">
-        <h1 class="logo">研究助手</h1>
+        <h1 class="logo">{{ currentUIConfig.navbarTitle }}</h1>
         <div class="nav-links">
           <router-link to="/" class="nav-link">新建调研</router-link>
         </div>
@@ -15,6 +15,17 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from 'vue'
+import { useResearchStore } from '@/stores/research'
+
+const researchStore = useResearchStore()
+const currentUIConfig = researchStore.currentUIConfig
+
+onMounted(async () => {
+  if (researchStore.scenarios.length === 0) {
+    await researchStore.loadScenarios()
+  }
+})
 </script>
 
 <style>

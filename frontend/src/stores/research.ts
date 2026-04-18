@@ -1,12 +1,22 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ResearchWorkflow, Task } from '@/types'
+import type { ResearchWorkflow, Task, ScenarioMetadata, ScenarioUIConfig } from '@/types'
 import { researchApi } from '@/api/client'
 import { sseClient } from '@/api/sse'
 
+const DEFAULT_UI_CONFIG: ScenarioUIConfig = {
+  navbarTitle: '研究助手',
+  formTitle: '开始新的调研',
+  topicLabel: '调研主题 *',
+  topicPlaceholder: '例如：人工智能在医疗领域的应用'
+}
+
 export const useResearchStore = defineStore('research', () => {
   const currentWorkflow = ref<ResearchWorkflow | null>(null)
+  const scenarios = ref<ScenarioMetadata[]>([])
+  const selectedScenarioId = ref<string | null>(null)
   const isLoading = ref(false)
+  const isLoadingScenarios = ref(false)
   const error = ref<string | null>(null)
   const pollingInterval = ref<number | null>(null)
 
@@ -15,29 +25,50 @@ export const useResearchStore = defineStore('research', () => {
   const tasks = computed(() => currentWorkflow.value?.tasks || [])
   const reportContent = computed(() => currentWorkflow.value?.reportContent || '')
 
+  const selectedScenario = computed(() => {
+    return scenarios.value.find(s => s.scenarioId === selectedScenarioId.value)
+  })
+
+  const currentUIConfig = computed(() => {
+    return {
+      ...DEFAULT_UI_CONFIG,
+      ...selectedScenario.value?.uiConfig
+    }
+  })
+
+  async function loadScenarios(): Promise<void> {
+    isLoadingScenarios.value = true
+    try {
+      scenarios.value = await researchApi.getScenarios()
+      if (scenarios.value.length > 0 && !selectedScenarioId.value) {
+        selectedScenarioId.value = scenarios.value[0].scenarioId
+      }
+    } catch (err) {
+      console.error('[ResearchStore] Failed to load scenarios:', err)
+    } finally {
+      isLoadingScenarios.value = false
+    }
+  }
+
   function startPolling(workflowId: string): void {
     if (pollingInterval.value) return
     
     pollingInterval.value = window.setInterval(async () => {
       try {
-        const workflow = await researchApi.getWorkflow(workflowId)
+        const workflow = await researchApi.getWorkflow(workflowId, selectedScenarioId.value || undefined)
         const currentTasks = currentWorkflow.value?.tasks || []
         let shouldUpdate = false
         
-        // 检查工作流状态是否变化
         if (currentWorkflow.value && workflow.status !== currentWorkflow.value.status) {
           shouldUpdate = true
         }
         
-        // 检查报告 URL 是否出现
         const hasNewReport = workflow.reportUrl && !currentWorkflow.value?.reportUrl
         
-        // 检查任务数量或状态是否有变化
         if (workflow.tasks && workflow.tasks.length > 0) {
           if (workflow.tasks.length !== currentTasks.length) {
             shouldUpdate = true
           } else {
-            // 检查每个任务的状态是否变化
             for (let i = 0; i < workflow.tasks.length; i++) {
               const newTask = workflow.tasks[i]
               const oldTask = currentTasks[i]
@@ -56,7 +87,6 @@ export const useResearchStore = defineStore('research', () => {
           console.log(`[Polling] Workflow updated, refreshing data`)
           currentWorkflow.value = workflow
           
-          // 如果有新的报告 URL，加载报告内容
           if (hasNewReport) {
             await fetchReportContent(workflowId)
           }
@@ -64,7 +94,7 @@ export const useResearchStore = defineStore('research', () => {
       } catch (err) {
         console.error('[Polling] Failed to fetch workflow:', err)
       }
-    }, 3000) // 每 3 秒轮询一次
+    }, 3000)
     console.log(`[ResearchStore] Started polling for workflow ${workflowId}`)
   }
 
@@ -81,7 +111,10 @@ export const useResearchStore = defineStore('research', () => {
     error.value = null
 
     try {
-      const response = await researchApi.createResearch({ topic, description })
+      const response = await researchApi.createResearch(
+        { topic, description },
+        selectedScenarioId.value || undefined
+      )
       await fetchWorkflow(response.workflowId)
       connectSSE(response.workflowId)
       return response.workflowId
@@ -98,17 +131,18 @@ export const useResearchStore = defineStore('research', () => {
     error.value = null
 
     try {
-      const workflow = await researchApi.getWorkflow(workflowId)
+      const workflow = await researchApi.getWorkflow(
+        workflowId,
+        selectedScenarioId.value || undefined
+      )
       currentWorkflow.value = workflow
       
-      // 如果有任务，立即更新
       if (workflow.tasks && workflow.tasks.length > 0) {
         console.log(`[ResearchStore] Fetched ${workflow.tasks.length} tasks from backend for workflow ${workflowId}`)
       } else {
         console.log(`[ResearchStore] No tasks found for workflow ${workflowId}, waiting for plan event...`)
       }
       
-      // 如果有报告 URL，加载报告内容
       if (workflow.reportUrl) {
         await fetchReportContent(workflowId)
       }
@@ -124,7 +158,10 @@ export const useResearchStore = defineStore('research', () => {
     if (!currentWorkflow.value?.reportUrl) return
     
     try {
-      const content = await researchApi.getReportContent(workflowId)
+      const content = await researchApi.getReportContent(
+        workflowId,
+        selectedScenarioId.value || undefined
+      )
       if (currentWorkflow.value) {
         currentWorkflow.value.reportContent = content
       }
@@ -140,7 +177,6 @@ export const useResearchStore = defineStore('research', () => {
       console.log('[SSE] Received plan event with', event.data.tasks?.length || 0, 'tasks')
       if (currentWorkflow.value) {
         currentWorkflow.value.tasks = event.data.tasks
-        // 收到 plan 事件后停止轮询
         stopPolling()
       }
     })
@@ -171,7 +207,6 @@ export const useResearchStore = defineStore('research', () => {
       if (currentWorkflow.value) {
         currentWorkflow.value.status = 'all_success'
         currentWorkflow.value.reportUrl = event.data.reportUrl
-        // 收到 result 事件后，加载报告内容
         await fetchReportContent(workflowId)
       }
       stopPolling()
@@ -187,7 +222,6 @@ export const useResearchStore = defineStore('research', () => {
       sseClient.disconnect()
     })
 
-    // 启动轮询作为备用方案
     startPolling(workflowId)
   }
 
@@ -216,12 +250,18 @@ export const useResearchStore = defineStore('research', () => {
 
   return {
     currentWorkflow,
+    scenarios,
+    selectedScenarioId,
+    selectedScenario,
+    currentUIConfig,
     isLoading,
+    isLoadingScenarios,
     error,
     currentWorkflowId,
     currentStatus,
     tasks,
     reportContent,
+    loadScenarios,
     createResearch,
     fetchWorkflow,
     fetchReportContent,

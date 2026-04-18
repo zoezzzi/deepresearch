@@ -1,20 +1,20 @@
 <template>
   <div class="research-form-container">
     <div class="form-card">
-      <h2 class="form-title">开始新的调研</h2>
+      <h2 class="form-title">{{ currentUIConfig.formTitle }}</h2>
       <p class="form-description">
         输入您感兴趣的主题，AI 将帮助您完成系统性的调研并生成完整报告
       </p>
 
       <form @submit.prevent="handleSubmit" class="form">
         <div class="form-group">
-          <label for="topic" class="form-label">调研主题 *</label>
+          <label for="topic" class="form-label">{{ currentUIConfig.topicLabel }}</label>
           <input
             id="topic"
             v-model="topic"
             type="text"
             class="form-input"
-            placeholder="例如：人工智能在医疗领域的应用"
+            :placeholder="currentUIConfig.topicPlaceholder"
             required
           />
         </div>
@@ -57,6 +57,7 @@ import { useResearchStore } from '@/stores/research'
 
 const router = useRouter()
 const researchStore = useResearchStore()
+const currentUIConfig = researchStore.currentUIConfig
 
 const topic = ref('')
 const description = ref('')

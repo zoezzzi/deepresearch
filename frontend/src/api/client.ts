@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { CreateResearchRequest, ResearchWorkflow, Task } from '@/types'
+import type { CreateResearchRequest, ResearchWorkflow, Task, ScenarioMetadata } from '@/types'
 
 const apiClient = axios.create({
   baseURL: '/api',
@@ -39,19 +39,43 @@ function transformWorkflowFromBackend(data: any): ResearchWorkflow {
   }
 }
 
+function transformScenarioFromBackend(data: any): ScenarioMetadata {
+  return {
+    scenarioId: data.scenario_id,
+    name: data.name,
+    description: data.description,
+    version: data.version,
+    author: data.author,
+    uiConfig: data.ui_config ? {
+      navbarTitle: data.ui_config.navbar_title,
+      formTitle: data.ui_config.form_title,
+      topicLabel: data.ui_config.topic_label,
+      topicPlaceholder: data.ui_config.topic_placeholder
+    } : undefined
+  }
+}
+
 export const researchApi = {
-  createResearch: async (request: CreateResearchRequest): Promise<{ workflowId: string }> => {
-    const response = await apiClient.post('/research', request)
+  getScenarios: async (): Promise<ScenarioMetadata[]> => {
+    const response = await apiClient.get('/research/scenarios')
+    return response.data.scenarios.map(transformScenarioFromBackend)
+  },
+
+  createResearch: async (request: CreateResearchRequest, scenarioId?: string): Promise<{ workflowId: string }> => {
+    const params = scenarioId ? { scenario_id: scenarioId } : {}
+    const response = await apiClient.post('/research', request, { params })
     return { workflowId: response.data.workflow_id }
   },
 
-  getWorkflow: async (workflowId: string): Promise<ResearchWorkflow> => {
-    const response = await apiClient.get(`/research/${workflowId}`)
+  getWorkflow: async (workflowId: string, scenarioId?: string): Promise<ResearchWorkflow> => {
+    const params = scenarioId ? { scenario_id: scenarioId } : {}
+    const response = await apiClient.get(`/research/${workflowId}`, { params })
     return transformWorkflowFromBackend(response.data)
   },
 
-  getReportContent: async (workflowId: string): Promise<string> => {
-    const response = await apiClient.get(`/research/${workflowId}/report-content`)
+  getReportContent: async (workflowId: string, scenarioId?: string): Promise<string> => {
+    const params = scenarioId ? { scenario_id: scenarioId } : {}
+    const response = await apiClient.get(`/research/${workflowId}/report-content`, { params })
     return response.data.content
   }
 }

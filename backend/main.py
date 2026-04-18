@@ -5,19 +5,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-from common.config import get_settings
-from common.logger import logger
-from infrastructure.db.session import init_db
-from infrastructure.db.async_pool import init_connection_pool, close_connection_pool, get_pool_stats, check_pool_health
-from core.workflow import setup_checkpointer, get_saver_manager
+from harness.config import get_harness_settings
+from harness.logger import logger
+from app.infrastructure.db.session import init_db
+from harness.db.async_pool import init_connection_pool, close_connection_pool, get_pool_stats, check_pool_health
+from app.research_assistant.workflow.saver import setup_checkpointer, get_saver_manager
 from api.controllers import research_router
+
+from app.scenarios.research_assistant import register_research_assistant
+from app.scenarios.registry import ScenarioRegistry
 
 # Windows 平台需要设置 SelectorEventLoop 以兼容 psycopg
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     logger.info("Windows 平台: 已设置 WindowsSelectorEventLoopPolicy")
 
-settings = get_settings()
+settings = get_harness_settings()
 
 
 @asynccontextmanager
@@ -31,6 +34,11 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("应用启动中...")
     logger.info("=" * 60)
+    
+    # 注册场景
+    logger.info("注册场景...")
+    register_research_assistant()
+    logger.info(f"已注册 {len(ScenarioRegistry.list_executors())} 个场景")
     
     # 初始化同步数据库
     logger.info("初始化同步数据库...")

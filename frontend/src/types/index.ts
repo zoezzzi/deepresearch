@@ -3,6 +3,22 @@ export interface CreateResearchRequest {
   description?: string
 }
 
+export interface ScenarioUIConfig {
+  navbarTitle?: string
+  formTitle?: string
+  topicLabel?: string
+  topicPlaceholder?: string
+}
+
+export interface ScenarioMetadata {
+  scenarioId: string
+  name: string
+  description: string
+  version: string
+  author?: string
+  uiConfig?: ScenarioUIConfig
+}
+
 export interface Task {
   taskId: string
   title: string
