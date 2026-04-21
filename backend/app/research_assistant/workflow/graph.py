@@ -26,13 +26,13 @@ from app.common.utils.time_utils import get_current_utc_time
 class ResearchWorkflowGraph:
     """
     调研工作流图
-    
+
     定义调研任务的完整工作流：
     1. plan: 生成任务计划
     2. execute_task: 执行单个任务
     3. generate_report: 生成报告
     """
-    
+
     def __init__(
         self,
         research_plan_service: ResearchPlanService,
@@ -260,7 +260,7 @@ class ResearchWorkflowGraph:
 
         # 计算完成率门槛: 必须 > 50% 才能生成报告
         completion_rate = completed_tasks / total_tasks if total_tasks > 0 else 0
-        
+
         if completion_rate <= 0.5:
             logger.warning(
                 f"[Workflow] Completion rate {completion_rate:.1%} <= 50%, "
@@ -273,7 +273,7 @@ class ResearchWorkflowGraph:
                 "task_summary": task_summary,
                 "updated_at": get_current_utc_time()
             }
-        
+
         logger.info(
             f"[Workflow] Completion rate {completion_rate:.1%} > 50%, "
             f"proceeding with report generation"
@@ -290,14 +290,15 @@ class ResearchWorkflowGraph:
         evaluation_id = None
 
         try:
+            logger.info(f"[Workflow] Starting report generation for workflow {state['workflow_id']}")
             workflow_id = state["workflow_id"]
 
             # 构建任务结果字典，方便查找
             task_results_map = {
-                result["task_id"]: result 
+                result["task_id"]: result
                 for result in state.get("task_results", [])
             }
-            
+
             task_entities = []
             for task_dict in state["tasks"]:
                 task = Task(
@@ -308,14 +309,14 @@ class ResearchWorkflowGraph:
                     query=task_dict["query"],
                     order=task_dict["order"]
                 )
-                
+
                 # 如果任务有结果，填充摘要数据
                 if task_dict["task_id"] in task_results_map:
                     result = task_results_map[task_dict["task_id"]]
                     task.summary = result.get("summary")
                     task.sources_summary = result.get("sources_summary")
                     task.notices = result.get("notices")
-                
+
                 task_entities.append(task)
 
             report = await self.report_generation_service.generate_report(
@@ -325,6 +326,8 @@ class ResearchWorkflowGraph:
             )
             report_content = report.content
             report_generated = True
+
+            logger.info(f"[Workflow] Report generated successfully: {len(report_content) if report_content else 0} characters")
 
             try:
                 logger.info(f"[Workflow] Saving report to storage")
@@ -349,13 +352,14 @@ class ResearchWorkflowGraph:
             if report_generated:
                 try:
                     logger.info(f"[Workflow] Creating evaluation record for workflow {state['workflow_id']}")
-                    evaluation = await self.evaluation_service.create_evaluation(workflow_id)
+                    scenario_id = state.get("scenario_id", "research_assistant_v1")
+                    evaluation = await self.evaluation_service.create_evaluation(workflow_id, scenario_id)
                     evaluation_id = evaluation.evaluation_id
 
                     asyncio.create_task(
                         run_evaluation_task(
                             evaluation_id=evaluation_id,
-                            workflow_id=state["workflow_id"],
+                            workflow_id=workflow_id,
                             report=report_content,
                             contexts=retrieved_chunks,
                             question=state["topic"],
@@ -372,6 +376,36 @@ class ResearchWorkflowGraph:
         except Exception as e:
             report_error = str(e)
             logger.error(f"[Workflow] Report generation failed: {report_error}")
+
+            # 尝试使用已有的任务摘要生成最小化报告作为降级方案
+            try:
+                logger.warning(f"[Workflow] Attempting minimal report generation as fallback")
+                minimal_report = await self._generate_minimal_report(state)
+                if minimal_report:
+                    report_content = minimal_report
+                    report_generated = True
+                    logger.info(f"[Workflow] Minimal report generated successfully")
+
+                    # 保存简化报告
+                    try:
+                        report_content_bytes = report_content.encode("utf-8")
+                        report_filename = f"{state['workflow_id']}.md"
+                        report_url = await self.object_storage.upload_object(
+                            bucket_name="reports",
+                            object_name=report_filename,
+                            data=report_content_bytes,
+                            content_type="text/markdown"
+                        )
+                        logger.info(f"[Workflow] Minimal report saved to storage: {report_url}")
+                        await self.event_publisher.publish_result_event(
+                            workflow_id=state["workflow_id"],
+                            report_url=report_url
+                        )
+                    except Exception as storage_error:
+                        logger.error(f"[Workflow] Failed to save minimal report: {storage_error}")
+            except Exception as fallback_error:
+                logger.error(f"[Workflow] Minimal report generation also failed: {fallback_error}")
+
             await self.event_publisher.publish_error_event(
                 workflow_id=state["workflow_id"],
                 message=f"Report generation failed: {report_error}"
@@ -402,6 +436,34 @@ class ResearchWorkflowGraph:
             result["error"] = report_error
 
         return result
+
+    async def _generate_minimal_report(self, state: WorkflowState) -> str:
+        """生成最小化报告作为降级方案"""
+        try:
+            topic = state["topic"]
+            tasks = state.get("tasks", [])
+
+            report_parts = [f"# {topic}", "", "## 任务总结", ""]
+
+            for task in tasks:
+                if task.get("status") == "completed":
+                    report_parts.append(f"### {task.get('title', 'Untitled')}")
+                    task_results = state.get("task_results", [])
+                    for result in task_results:
+                        if result.get("task_id") == task.get("task_id"):
+                            summary = result.get("summary", "")
+                            if summary:
+                                report_parts.append(f"{summary[:200]}...")
+                            break
+                    report_parts.append("")
+
+            report_parts.append("---")
+            report_parts.append("*Note: This is a minimal report due to full report generation failure.*")
+
+            return "\n".join(report_parts)
+        except Exception as e:
+            logger.error(f"[Workflow] Minimal report generation failed: {e}")
+            return ""
 
     @property
     def graph(self):

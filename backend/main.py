@@ -12,8 +12,8 @@ from harness.db.async_pool import init_connection_pool, close_connection_pool, g
 from app.research_assistant.workflow.saver import setup_checkpointer, get_saver_manager
 from api.controllers import research_router
 
-from app.scenarios.research_assistant import register_research_assistant
-from app.scenarios.registry import ScenarioRegistry
+from app.config import get_app_settings
+from app.scenarios.manager import register_enabled_scenarios
 
 # Windows 平台需要设置 SelectorEventLoop 以兼容 psycopg
 if sys.platform == 'win32':
@@ -35,10 +35,16 @@ async def lifespan(app: FastAPI):
     logger.info("应用启动中...")
     logger.info("=" * 60)
     
-    # 注册场景
-    logger.info("注册场景...")
-    register_research_assistant()
-    logger.info(f"已注册 {len(ScenarioRegistry.list_executors())} 个场景")
+    # 注册场景（App 层负责）
+    logger.info("初始化场景...")
+    app_settings = get_app_settings()
+    enabled_scenarios = app_settings.enabled_scenarios_list
+    
+    if not enabled_scenarios:
+        logger.warning("[Main] 没有配置启用的场景，应用功能将受限")
+    else:
+        logger.info(f"[Main] 准备注册场景: {enabled_scenarios}")
+        register_enabled_scenarios(enabled_scenarios)
     
     # 初始化同步数据库
     logger.info("初始化同步数据库...")

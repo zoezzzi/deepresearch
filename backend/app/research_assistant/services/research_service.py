@@ -30,7 +30,6 @@ from harness.config import get_harness_settings
 from harness.logger import logger
 from app.common.utils.time_utils import get_current_utc_time
 from harness.workflow.saver import CheckpointConnectionError
-from app.scenarios.research_assistant.config import REPORT_URL_PREFIX
 
 settings = get_harness_settings()
 
@@ -41,7 +40,8 @@ class ResearchService:
         workflow_repository: WorkflowRepository,
         task_repository: TaskRepository,
         evaluation_service: EvaluationService,
-        evaluation_orchestrator: EvaluationOrchestrator
+        evaluation_orchestrator: EvaluationOrchestrator,
+        report_url_prefix: str = "/research/reports"
     ):
         self.workflow_repository = workflow_repository
         self.task_repository = task_repository
@@ -61,7 +61,7 @@ class ResearchService:
         self.evaluation_orchestrator = evaluation_orchestrator
 
         self.event_publisher = get_event_publisher()
-        self.object_storage = LocalObjectStorage(url_prefix=REPORT_URL_PREFIX)
+        self.object_storage = LocalObjectStorage(url_prefix=report_url_prefix)
         
         from app.research_assistant.workflow import ResearchWorkflowGraph, WorkflowState
         from harness.workflow import get_saver_manager
@@ -118,6 +118,7 @@ class ResearchService:
             "workflow_id": workflow_id_str,
             "topic": workflow.topic,
             "description": workflow.description,
+            "scenario_id": workflow.scenario_id,
             "tasks": [],
             "current_task_index": 0,
             "task_results": [],

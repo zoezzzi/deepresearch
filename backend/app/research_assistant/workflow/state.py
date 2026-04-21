@@ -16,6 +16,7 @@ class WorkflowState(TypedDict, total=False):
     workflow_id: str
     topic: str
     description: Optional[str]
+    scenario_id: Optional[str]
     tasks: List[Dict[str, Any]]
     current_task_index: int
     task_results: List[Dict[str, Any]]

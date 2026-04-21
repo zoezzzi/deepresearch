@@ -46,15 +46,13 @@ class TaskModel(Base):
 
 class EvaluationModel(Base):
     __tablename__ = "evaluation_results"
-
+    
     evaluation_id = Column(String, primary_key=True, index=True)
     workflow_id = Column(String, ForeignKey("workflows.workflow_id"), nullable=False, index=True)
+    scenario_id = Column(String, nullable=True, index=True)
     
-    faithfulness = Column(Float, nullable=True)
-    context_relevancy = Column(Float, nullable=True)
-    coverage = Column(Float, nullable=True)
-    structure = Column(Float, nullable=True)
-    professional_depth = Column(Float, nullable=True)
+    # 动态指标存储：支持任意场景的评估指标
+    metrics = Column(JSON, nullable=False, default=dict)
     overall_score = Column(Float, nullable=True)
     
     status = Column(Enum(EvaluationStatus), default=EvaluationStatus.PENDING, nullable=False, index=True)
@@ -65,5 +63,5 @@ class EvaluationModel(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False, index=True)
-
+    
     workflow = relationship("WorkflowModel", back_populates="evaluations")

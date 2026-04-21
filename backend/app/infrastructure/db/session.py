@@ -18,10 +18,10 @@ engine = create_engine(
     settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=15,
+    max_overflow=30,
     pool_timeout=30,
-    pool_recycle=3600,
+    pool_recycle=1800,
     connect_args={
         "connect_timeout": 10,
         "options": "-c idle_in_transaction_session_timeout=60000"

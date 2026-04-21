@@ -21,6 +21,7 @@ async def run_evaluation_task(
         await evaluation_service.start_evaluation(evaluation_id)
 
         result = await evaluation_orchestrator.evaluate_all(
+            answer=report,
             report=report,
             contexts=contexts,
             question=question,
@@ -31,6 +32,7 @@ async def run_evaluation_task(
         await evaluation_service.complete_evaluation(
             evaluation_id=evaluation_id,
             scores=result["scores"],
+            overall_score=result["overall_score"],
             details=result.get("details")
         )
 

@@ -16,6 +16,16 @@ from app.research_assistant.repositories import (
 )
 from app.research_assistant.services import EvaluationService, ResearchService
 
+from app.dev_survey.repositories import (
+    WorkflowRepository as DevSurveyWorkflowRepository,
+    TaskRepository as DevSurveyTaskRepository,
+    EvaluationRepository as DevSurveyEvaluationRepository
+)
+from app.dev_survey.services import (
+    EvaluationService as DevSurveyEvaluationService, 
+    ResearchService as DevSurveyResearchService
+)
+
 
 @lru_cache()
 def get_sse_manager():
@@ -35,9 +45,27 @@ def get_evaluation_repository(db: Session):
 
 
 @lru_cache()
-def get_evaluation_orchestrator():
+def get_research_assistant_evaluation_orchestrator():
+    from app.scenarios.research_assistant.evaluation_config import get_evaluators, get_weights
     llm_client = get_llm_client()
-    return EvaluationOrchestrator(llm_client)
+    evaluators = get_evaluators(llm_client)
+    weights = get_weights()
+    return EvaluationOrchestrator(evaluators=evaluators, weights=weights)
+
+
+@lru_cache()
+def get_dev_survey_evaluation_orchestrator():
+    from app.scenarios.dev_survey.evaluation_config import get_evaluators, get_weights
+    llm_client = get_llm_client()
+    evaluators = get_evaluators(llm_client)
+    weights = get_weights()
+    return EvaluationOrchestrator(evaluators=evaluators, weights=weights)
+
+
+@lru_cache()
+def get_evaluation_orchestrator():
+    """获取评估编排器（默认使用 research_assistant 配置）"""
+    return get_research_assistant_evaluation_orchestrator()
 
 
 def create_evaluation_service(db: Session):
@@ -45,14 +73,29 @@ def create_evaluation_service(db: Session):
     return EvaluationService(evaluation_repository)
 
 
-def create_research_service(db: Session):
+def create_research_service(db: Session, report_url_prefix: str):
     workflow_repository = get_workflow_repository(db)
     task_repository = get_task_repository(db)
     evaluation_service = create_evaluation_service(db)
-    evaluation_orchestrator = get_evaluation_orchestrator()
+    evaluation_orchestrator = get_research_assistant_evaluation_orchestrator()
     return ResearchService(
         workflow_repository=workflow_repository,
         task_repository=task_repository,
         evaluation_service=evaluation_service,
-        evaluation_orchestrator=evaluation_orchestrator
+        evaluation_orchestrator=evaluation_orchestrator,
+        report_url_prefix=report_url_prefix
+    )
+
+
+def create_dev_survey_service(db: Session, report_url_prefix: str):
+    workflow_repository = get_workflow_repository(db)
+    task_repository = get_task_repository(db)
+    evaluation_service = DevSurveyEvaluationService(get_evaluation_repository(db))
+    evaluation_orchestrator = get_dev_survey_evaluation_orchestrator()
+    return DevSurveyResearchService(
+        workflow_repository=workflow_repository,
+        task_repository=task_repository,
+        evaluation_service=evaluation_service,
+        evaluation_orchestrator=evaluation_orchestrator,
+        report_url_prefix=report_url_prefix
     )

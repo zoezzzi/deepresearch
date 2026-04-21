@@ -8,7 +8,8 @@ from app.scenarios.research_assistant.config import (
     SCENARIO_DESCRIPTION,
     SCENARIO_VERSION,
     SCENARIO_AUTHOR,
-    SCENARIO_UI_CONFIG
+    SCENARIO_UI_CONFIG,
+    REPORT_URL_PREFIX
 )
 from app.infrastructure.db.session import SessionLocal
 from app.service_factory import create_research_service
@@ -36,7 +37,7 @@ class ResearchAssistantExecutor(ScenarioExecutor):
     async def create_workflow(self, request: CreateResearchRequest) -> any:
         db = self._get_db()
         try:
-            service = create_research_service(db)
+            service = create_research_service(db, REPORT_URL_PREFIX)
             return await service.create_research_workflow(request)
         finally:
             db.close()
@@ -44,7 +45,7 @@ class ResearchAssistantExecutor(ScenarioExecutor):
     async def execute_workflow(self, workflow_id: UUID) -> None:
         db = self._get_db()
         try:
-            service = create_research_service(db)
+            service = create_research_service(db, REPORT_URL_PREFIX)
             await service.execute_research_workflow(workflow_id)
         finally:
             db.close()
@@ -52,7 +53,7 @@ class ResearchAssistantExecutor(ScenarioExecutor):
     async def get_workflow_status(self, workflow_id: UUID) -> any:
         db = self._get_db()
         try:
-            service = create_research_service(db)
+            service = create_research_service(db, REPORT_URL_PREFIX)
             return await service.get_workflow_status(workflow_id)
         finally:
             db.close()
@@ -60,7 +61,7 @@ class ResearchAssistantExecutor(ScenarioExecutor):
     async def get_report_content(self, workflow_id: UUID) -> str | None:
         db = self._get_db()
         try:
-            service = create_research_service(db)
+            service = create_research_service(db, REPORT_URL_PREFIX)
             return await service.get_report_content(workflow_id)
         finally:
             db.close()
@@ -68,7 +69,7 @@ class ResearchAssistantExecutor(ScenarioExecutor):
     def get_report_file_path(self, report_id: str) -> str | None:
         db = self._get_db()
         try:
-            service = create_research_service(db)
+            service = create_research_service(db, REPORT_URL_PREFIX)
             return service.get_report_file_path(report_id)
         finally:
             db.close()

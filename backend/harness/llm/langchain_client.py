@@ -1,4 +1,6 @@
 from typing import AsyncGenerator, List, Dict, Any, Optional
+import os
+import asyncio
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
@@ -11,6 +13,20 @@ from harness.logger import logger
 settings = get_harness_settings()
 
 
+def _init_langsmith():
+    if settings.LANGCHAIN_TRACING_V2:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGCHAIN_ENDPOINT
+        os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
+        os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
+        logger.info(f"[LangChainClient] LangSmith tracing enabled for project: {settings.LANGCHAIN_PROJECT}")
+    else:
+        logger.debug("[LangChainClient] LangSmith tracing disabled")
+
+
+_init_langsmith()
+
+
 class LangChainClient(LLMClient):
     def __init__(self):
         self.api_key = settings.LLM_API_KEY
@@ -18,6 +34,7 @@ class LangChainClient(LLMClient):
         self.model = settings.LLM_MODEL_ID
         self.temperature = settings.LLM_TEMPERATURE
         self.timeout = settings.LLM_TIMEOUT
+        self.max_retries = settings.LLM_MAX_RETRIES
         
         if not self.api_key and hasattr(settings, 'QWEN_API_KEY'):
             self.api_key = settings.QWEN_API_KEY
@@ -101,7 +118,7 @@ class LangChainClient(LLMClient):
         
         langchain_messages = self._convert_messages(messages)
         
-        max_attempts = 2
+        max_attempts = self.max_retries
         last_error = None
         
         for attempt in range(max_attempts):
@@ -126,9 +143,8 @@ class LangChainClient(LLMClient):
                     raise
             
             if attempt < max_attempts - 1:
-                delay = min(1 * (2 ** attempt), 5)
+                delay = min(2 ** attempt, 10)
                 logger.warning(f"[LangChainClient] Retrying in {delay:.1f}s...")
-                import asyncio
                 await asyncio.sleep(delay)
             else:
                 break
@@ -175,15 +191,16 @@ class LangChainClient(LLMClient):
     async def chat_stream(self, messages: List[Dict[str, str]], **kwargs) -> AsyncGenerator[str, None]:
         model = kwargs.get("model", self.model)
         temperature = kwargs.get("temperature", self.temperature)
+        timeout = kwargs.get("timeout", self.timeout)
         
         logger.info(f"[LangChainClient] Calling chat stream with model: {model}")
         
         langchain_messages = self._convert_messages(messages)
         
-        max_attempts = 2
+        max_attempts = self.max_retries
         for attempt in range(max_attempts):
             try:
-                client = self._get_client(model=model, temperature=temperature)
+                client = self._get_client(model=model, temperature=temperature, timeout=timeout)
                 
                 chunk_count = 0
                 async for chunk in client.astream(langchain_messages):
@@ -201,8 +218,8 @@ class LangChainClient(LLMClient):
             except (ConnectionError, TimeoutError) as e:
                 if attempt < max_attempts - 1:
                     logger.warning(f"[LangChainClient] Stream connection failed, retrying: {str(e)}")
-                    import asyncio
-                    await asyncio.sleep(1 * (attempt + 1))
+                    delay = min(2 ** attempt, 10)
+                    await asyncio.sleep(delay)
                 else:
                     logger.error(f"[LangChainClient] Stream failed after {max_attempts} attempts: {str(e)}")
                     raise

@@ -169,52 +169,45 @@ class ResearchReport(BaseModel):
 class EvaluationResult(BaseModel):
     evaluation_id: str
     workflow_id: str
+    scenario_id: Optional[str] = None
     status: EvaluationStatus = EvaluationStatus.PENDING
-    faithfulness: Optional[float] = None
-    context_relevancy: Optional[float] = None
-    coverage: Optional[float] = None
-    structure: Optional[float] = None
-    professional_depth: Optional[float] = None
+    
+    # 动态指标存储：支持任意场景的评估指标
+    metrics: Dict[str, float] = Field(default_factory=dict)
     overall_score: Optional[float] = None
+    
     error_message: Optional[str] = None
     evaluation_details: Optional[Dict[str, Any]] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
+    
     def model_post_init(self, __context):
         if self.created_at is None:
             self.created_at = get_current_utc_time()
         if self.updated_at is None:
             self.updated_at = get_current_utc_time()
-
+    
     def start(self) -> None:
         self.status = EvaluationStatus.IN_PROGRESS
         self.started_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
-
+    
     def complete(
         self,
-        faithfulness: float,
-        context_relevancy: float,
-        coverage: float,
-        structure: float,
-        professional_depth: float,
+        metrics: Dict[str, float],
         overall_score: float,
         evaluation_details: Optional[Dict[str, Any]] = None
     ) -> None:
         self.status = EvaluationStatus.COMPLETED
-        self.faithfulness = faithfulness
-        self.context_relevancy = context_relevancy
-        self.coverage = coverage
-        self.structure = structure
-        self.professional_depth = professional_depth
+        self.metrics = metrics
         self.overall_score = overall_score
         self.evaluation_details = evaluation_details
+        
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
-
+    
     def fail(self, error_message: str) -> None:
         self.status = EvaluationStatus.FAILED
         self.error_message = error_message

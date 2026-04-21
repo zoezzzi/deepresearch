@@ -45,21 +45,31 @@ class RAGASEvaluator(BaseEvaluator):
 
     async def _evaluate_faithfulness(self, answer: str, contexts: List[str]) -> float:
         if not self._ragas_available:
-            return 0.8
+            logger.warning("[RAGASEvaluator] RAGAS unavailable, faithfulness evaluation failed")
+            return 0.0
         try:
             score = await faithfulness.ascore(answer=answer, contexts=contexts)
-            return float(score) if score is not None else 0.8
-        except Exception:
-            return 0.8
+            if score is None:
+                logger.warning("[RAGASEvaluator] Faithfulness score is None, evaluation failed")
+                return 0.0
+            return float(score)
+        except Exception as e:
+            logger.warning(f"[RAGASEvaluator] Faithfulness evaluation failed: {str(e)}")
+            return 0.0
 
     async def _evaluate_context_relevancy(self, question: str, contexts: List[str]) -> float:
         if not self._ragas_available:
-            return 0.7
+            logger.warning("[RAGASEvaluator] RAGAS unavailable, context_relevancy evaluation failed")
+            return 0.0
         try:
             score = await context_relevancy.ascore(question=question, contexts=contexts)
-            return float(score) if score is not None else 0.7
-        except Exception:
-            return 0.7
+            if score is None:
+                logger.warning("[RAGASEvaluator] Context relevancy score is None, evaluation failed")
+                return 0.0
+            return float(score)
+        except Exception as e:
+            logger.warning(f"[RAGASEvaluator] Context relevancy evaluation failed: {str(e)}")
+            return 0.0
 
     async def _fallback_evaluate(
         self,
@@ -67,8 +77,8 @@ class RAGASEvaluator(BaseEvaluator):
         contexts: List[str],
         question: str
     ) -> Dict[str, float]:
-        logger.info("[RAGASEvaluator] Using fallback evaluation")
+        logger.warning("[RAGASEvaluator] Fallback evaluation used, all scores set to 0.0 due to evaluation failure")
         return {
-            "faithfulness": 0.8,
-            "context_relevancy": 0.7
+            "faithfulness": 0.0,
+            "context_relevancy": 0.0
         }

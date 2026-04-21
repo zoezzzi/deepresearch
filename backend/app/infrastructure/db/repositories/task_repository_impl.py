@@ -91,3 +91,28 @@ class TaskRepositoryImpl(TaskRepository):
             model.completed_at = task.completed_at
             self.db_session.flush()
             self.db_session.commit()
+    
+    async def update_batch(self, tasks: List[Task]) -> None:
+        """批量更新多个任务状态"""
+        logger.info(f"Updating batch of {len(tasks)} tasks")
+        
+        from app.common.utils.time_utils import get_current_utc_time
+        
+        for task in tasks:
+            model = self.db_session.query(TaskModel).filter_by(task_id=task.task_id).first()
+            if model:
+                model.title = task.title
+                model.intent = task.intent
+                model.query = task.query
+                model.order = task.order
+                model.status = task.status
+                model.summary = task.summary
+                model.sources_summary = task.sources_summary
+                model.notices = task.notices
+                model.updated_at = get_current_utc_time()
+                model.started_at = task.started_at
+                model.completed_at = task.completed_at
+        
+        self.db_session.flush()
+        self.db_session.commit()
+        logger.info(f"Batch update of {len(tasks)} tasks completed")

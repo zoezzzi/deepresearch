@@ -29,6 +29,9 @@ backend/requirements.in
 
 docs/
 scripts/
+backend/migrations
+
+
 
 pytest.ini
 requirements-test.txt

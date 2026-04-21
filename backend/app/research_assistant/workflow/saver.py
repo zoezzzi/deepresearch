@@ -6,7 +6,7 @@ from langchain_core.runnables import RunnableConfig
 
 from harness.logger import logger
 from harness.config import get_harness_settings
-from app.common.exceptions import CheckpointConnectionError
+from harness.exceptions import CheckpointConnectionError
 from harness.db.async_pool import get_connection_pool, check_pool_health
 
 
@@ -41,13 +41,15 @@ class AsyncPostgresSaverManager:
             return False
 
     async def _initialize_saver(self) -> None:
-        pool = get_connection_pool()
+        """初始化 saver - 使用连接池而不是单个连接"""
+        db_pool = get_connection_pool()
 
-        async with pool.connection() as conn:
-            self._saver = AsyncPostgresSaver(conn)
-            self._initialized = True
+        # AsyncPostgresSaver 需要直接使用 psycopg_pool.AsyncConnectionPool 实例
+        # 使用 DatabasePool 内部的 _pool 属性（真正的 AsyncConnectionPool 实例）
+        self._saver = AsyncPostgresSaver(db_pool._pool)
+        self._initialized = True
 
-        logger.info("[AsyncPostgresSaverManager] AsyncPostgresSaver initialized successfully")
+        logger.info("[AsyncPostgresSaverManager] AsyncPostgresSaver initialized successfully with connection pool")
 
     async def initialize_and_verify(self) -> AsyncPostgresSaver:
         logger.info("[AsyncPostgresSaverManager] Initializing and verifying saver...")

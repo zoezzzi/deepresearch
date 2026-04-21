@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 from urllib.parse import quote_plus
 
@@ -26,16 +26,33 @@ class HarnessSettings(BaseSettings):
     LLM_MODEL_ID: str = "qwen-plus"
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
-    LLM_TIMEOUT: int = 300
+    LLM_TIMEOUT: int = 600
     LLM_TEMPERATURE: float = 0.7
     
+    LLM_TIMEOUT_PLAN: int = 300
+    LLM_TIMEOUT_EXECUTE: int = 600
+    LLM_TIMEOUT_REPORT: int = 900
+    
+    LLM_MAX_RETRIES: int = 3
+    
     TAVILY_API_KEY: str = ""
+    GITHUB_API_KEY: str = ""
     
     DB_POOL_MIN_SIZE: int = 5
     DB_POOL_MAX_SIZE: int = 20
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_MAX_IDLE: int = 300
     DB_POOL_MAX_LIFETIME: int = 3600
+    
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "deepresearch"
+    
+    USE_PARALLEL_EXECUTION: bool = True
+    MAX_CONCURRENT_TASKS: int = 3
+    RESOURCE_CLEANUP_INTERVAL: int = 3600
+    MAX_CACHE_AGE: int = 86400
     
     @property
     def DATABASE_URL(self) -> str:
@@ -47,10 +64,11 @@ class HarnessSettings(BaseSettings):
         encoded_password = quote_plus(self.POSTGRES_PASSWORD)
         return f"postgresql+psycopg2://{self.POSTGRES_USER}:{encoded_password}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
 
 @lru_cache()

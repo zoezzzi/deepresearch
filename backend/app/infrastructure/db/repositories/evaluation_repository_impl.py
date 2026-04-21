@@ -15,12 +15,9 @@ class EvaluationRepositoryImpl(EvaluationRepository):
         return EvaluationResult(
             evaluation_id=model.evaluation_id,
             workflow_id=model.workflow_id,
+            scenario_id=model.scenario_id,
             status=EvaluationStatus(model.status) if isinstance(model.status, str) else model.status,
-            faithfulness=model.faithfulness,
-            context_relevancy=model.context_relevancy,
-            coverage=model.coverage,
-            structure=model.structure,
-            professional_depth=model.professional_depth,
+            metrics=model.metrics or {},
             overall_score=model.overall_score,
             error_message=model.error_message,
             evaluation_details=model.evaluation_details,
@@ -34,12 +31,9 @@ class EvaluationRepositoryImpl(EvaluationRepository):
         return EvaluationModel(
             evaluation_id=evaluation.evaluation_id,
             workflow_id=evaluation.workflow_id,
+            scenario_id=evaluation.scenario_id,
             status=evaluation.status,
-            faithfulness=evaluation.faithfulness,
-            context_relevancy=evaluation.context_relevancy,
-            coverage=evaluation.coverage,
-            structure=evaluation.structure,
-            professional_depth=evaluation.professional_depth,
+            metrics=evaluation.metrics or {},
             overall_score=evaluation.overall_score,
             error_message=evaluation.error_message,
             evaluation_details=evaluation.evaluation_details,
@@ -73,11 +67,8 @@ class EvaluationRepositoryImpl(EvaluationRepository):
         model = self.db_session.query(EvaluationModel).filter_by(evaluation_id=evaluation.evaluation_id).first()
         if model:
             model.status = evaluation.status
-            model.faithfulness = evaluation.faithfulness
-            model.context_relevancy = evaluation.context_relevancy
-            model.coverage = evaluation.coverage
-            model.structure = evaluation.structure
-            model.professional_depth = evaluation.professional_depth
+            model.scenario_id = evaluation.scenario_id
+            model.metrics = evaluation.metrics or {}
             model.overall_score = evaluation.overall_score
             model.error_message = evaluation.error_message
             model.evaluation_details = evaluation.evaluation_details

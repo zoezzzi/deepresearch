@@ -12,11 +12,20 @@ from api.models import (
 )
 from api.dependencies import get_scenario_registry, get_sse_manager_dep
 from app.scenarios.registry import ScenarioRegistry
+from app.config import get_app_settings
 from harness.events.manager import SSEConnectionManager, SSEEvent
 from harness.logger import logger
 
 router = APIRouter(prefix="/research", tags=["research"])
-DEFAULT_SCENARIO_ID = "research_assistant_v1"
+
+
+def get_default_scenario_id() -> str:
+    """获取默认场景ID，从配置中读取第一个启用的场景"""
+    settings = get_app_settings()
+    scenarios = settings.enabled_scenarios_list
+    if scenarios:
+        return scenarios[0]
+    return "research_assistant_v1"  # 兜底默认值
 
 
 @router.get(
@@ -49,7 +58,7 @@ async def list_scenarios(
 )
 async def create_research(
     request: CreateResearchRequest,
-    scenario_id: str = Query(DEFAULT_SCENARIO_ID, description="场景标识符，默认为研究助手"),
+    scenario_id: str = Query(default_factory=get_default_scenario_id, description="场景标识符，默认为第一个启用的场景"),
     registry: ScenarioRegistry = Depends(get_scenario_registry),
     sse_manager: SSEConnectionManager = Depends(get_sse_manager_dep)
 ):
@@ -102,7 +111,7 @@ async def create_research(
 )
 async def get_workflow_status(
     workflow_id: str,
-    scenario_id: str = Query(DEFAULT_SCENARIO_ID, description="场景标识符"),
+    scenario_id: str = Query(default_factory=get_default_scenario_id, description="场景标识符"),
     registry: ScenarioRegistry = Depends(get_scenario_registry)
 ):
     try:
@@ -178,7 +187,7 @@ async def stream_workflow_events(
 @router.get("/reports/{report_id}")
 async def download_report(
     report_id: str,
-    scenario_id: str = Query(DEFAULT_SCENARIO_ID, description="场景标识符"),
+    scenario_id: str = Query(default_factory=get_default_scenario_id, description="场景标识符"),
     registry: ScenarioRegistry = Depends(get_scenario_registry)
 ):
     try:
@@ -209,7 +218,7 @@ async def download_report(
 @router.get("/{workflow_id}/report-content")
 async def get_report_content(
     workflow_id: str,
-    scenario_id: str = Query(DEFAULT_SCENARIO_ID, description="场景标识符"),
+    scenario_id: str = Query(default_factory=get_default_scenario_id, description="场景标识符"),
     registry: ScenarioRegistry = Depends(get_scenario_registry)
 ):
     try:

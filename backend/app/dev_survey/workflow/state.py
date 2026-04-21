@@ -1,0 +1,34 @@
+"""
+调研助手工作流状态定义
+
+定义 LangGraph 工作流的状态结构
+"""
+from typing import TypedDict, List, Optional, Any, Dict
+from datetime import datetime
+
+
+class WorkflowState(TypedDict, total=False):
+    """
+    调研工作流状态
+    
+    用于在 LangGraph 工作流节点之间传递状态
+    """
+    workflow_id: str
+    topic: str
+    description: Optional[str]
+    scenario_id: Optional[str]
+    tasks: List[Dict[str, Any]]
+    current_task_index: int
+    task_results: List[Dict[str, Any]]
+    report_content: Optional[str]
+    report_url: Optional[str]
+    error: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    workflow_status: Optional[str]
+    task_summary: Optional[Dict[str, int]]
+    retrieved_chunks: Optional[List[str]]
+    sub_questions: Optional[List[str]]
+    citations: Optional[List[str]]
+    checklist_items: Optional[List[str]]
+    retrieved_documents: Optional[List[Dict[str, Any]]]
