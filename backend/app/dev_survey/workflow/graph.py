@@ -20,7 +20,10 @@ from app.dev_survey.tasks import run_evaluation_task
 from harness.storage.base import ObjectStorage
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
+from harness.config import get_harness_settings
 from app.common.utils.time_utils import get_current_utc_time
+
+settings = get_harness_settings()
 
 
 class ResearchWorkflowGraph:
@@ -115,6 +118,8 @@ class ResearchWorkflowGraph:
             checklist_items = sub_questions
 
             logger.info(f"[Workflow] Plan generated with {len(task_dicts)} tasks")
+            initial_accumulated = [] if getattr(settings, "ENABLE_KNOWLEDGE_TRANSFER", False) else None
+            
             return {
                 "tasks": task_dicts,
                 "current_task_index": 0,
@@ -124,6 +129,7 @@ class ResearchWorkflowGraph:
                 "retrieved_chunks": [],
                 "retrieved_documents": [],
                 "citations": [],
+                "accumulated_knowledge": initial_accumulated,
                 "updated_at": get_current_utc_time()
             }
         except Exception as e:
@@ -164,7 +170,12 @@ class ResearchWorkflowGraph:
                 order=current_task["order"]
             )
 
-            summary, sources_summary, notices = await self.task_execution_service.execute_task(task)
+            enable_knowledge_transfer = getattr(settings, "ENABLE_KNOWLEDGE_TRANSFER", False)
+            accumulated_knowledge = state.get("accumulated_knowledge", []) if enable_knowledge_transfer else None
+
+            summary, sources_summary, notices = await self.task_execution_service.execute_task(
+                task, accumulated_knowledge=accumulated_knowledge
+            )
 
             task_result = {
                 "task_id": current_task["task_id"],
@@ -208,12 +219,36 @@ class ResearchWorkflowGraph:
                     "task_id": current_task["task_id"]
                 })
 
+            new_accumulated = None
+            if enable_knowledge_transfer:
+                new_accumulated = state.get("accumulated_knowledge", [])
+                if summary:
+                    key_finding = summary[:150].strip()
+                    if key_finding:
+                        new_accumulated = new_accumulated + [f"[{current_task['title']}] {key_finding}"]
+
+            citations = state.get("citations", [])
+            if sources_summary:
+                for line in sources_summary.split('\n'):
+                    line = line.strip()
+                    if line.startswith('- ') or line.startswith('* '):
+                        line = line[2:]
+                    for url_pattern in ['http://', 'https://']:
+                        idx = line.find(url_pattern)
+                        if idx != -1:
+                            url = line[idx:].split()[0].rstrip(')')
+                            if url not in citations:
+                                citations = citations + [url]
+                            break
+
             return {
                 "tasks": tasks,
                 "current_task_index": current_index + 1,
                 "task_results": state["task_results"] + [task_result],
                 "retrieved_chunks": retrieved_chunks,
                 "retrieved_documents": retrieved_documents,
+                "accumulated_knowledge": new_accumulated,
+                "citations": citations,
                 "updated_at": get_current_utc_time()
             }
         except Exception as e:
@@ -293,6 +328,8 @@ class ResearchWorkflowGraph:
         checklist_items = state.get("checklist_items", sub_questions)
         retrieved_documents = state.get("retrieved_documents", [])
         citations = state.get("citations", [])
+
+        logger.info(f"[Workflow] Collected {len(citations)} citations from task executions")
 
         report_generated = False
         report_content = None
@@ -440,6 +477,7 @@ class ResearchWorkflowGraph:
             "report_url": report_url,
             "workflow_status": workflow_status,
             "task_summary": task_summary,
+            "citations": citations,
             "updated_at": get_current_utc_time()
         }
 

@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import asyncio
 from .base_evaluator import BaseEvaluator
 from harness.logger import logger
@@ -14,7 +14,6 @@ class EvaluationOrchestrator:
         
         all_scores = {}
         all_details = {}
-        failed_metrics: List[str] = []
         
         tasks = []
         for evaluator in self.evaluators:
@@ -30,37 +29,27 @@ class EvaluationOrchestrator:
         
         expected_metrics = set(self.weights.keys())
         produced_metrics = set(all_scores.keys())
-        failed_metrics = list(expected_metrics - produced_metrics)
+        missing_metrics = expected_metrics - produced_metrics
         
-        if failed_metrics:
-            logger.warning(
-                f"[EvaluationOrchestrator] Failed metrics: {failed_metrics}"
-            )
+        for metric in missing_metrics:
+            all_scores[metric] = 0.0
+            logger.warning(f"[EvaluationOrchestrator] Metric '{metric}' failed, filling with 0.0")
         
-        overall_score = self._calculate_overall_score(all_scores, failed_metrics)
+        overall_score = self._calculate_overall_score(all_scores)
         
-        logger.info(f"[EvaluationOrchestrator] All scores: {all_scores}, overall: {overall_score}, failed_metrics: {failed_metrics}")
+        logger.info(f"[EvaluationOrchestrator] All scores: {all_scores}, overall: {overall_score}")
         return {
             "scores": all_scores,
             "overall_score": overall_score,
-            "details": all_details,
-            "failed_metrics": failed_metrics
+            "details": all_details
         }
 
-    def _calculate_overall_score(
-        self,
-        scores: Dict[str, float],
-        failed_metrics: Optional[List[str]] = None
-    ) -> float:
-        failed_set = set(failed_metrics) if failed_metrics else set()
-        
+    def _calculate_overall_score(self, scores: Dict[str, float]) -> float:
         total = 0.0
         weight_sum = 0.0
         
         for metric, weight in self.weights.items():
-            if metric in failed_set:
-                continue
-            if metric in scores and scores[metric] is not None:
+            if metric in scores:
                 total += scores[metric] * weight
                 weight_sum += weight
         

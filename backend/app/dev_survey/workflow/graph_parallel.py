@@ -148,6 +148,7 @@ class ResearchWorkflowGraphParallel:
                 "retrieved_chunks": [],
                 "retrieved_documents": [],
                 "citations": [],
+                "accumulated_knowledge": [],
                 "updated_at": get_current_utc_time()
             }
         except Exception as e:
@@ -196,6 +197,7 @@ class ResearchWorkflowGraphParallel:
             # 收集检索到的内容
             retrieved_chunks = []
             retrieved_documents = []
+            accumulated_knowledge = []
             for result in task_results:
                 if result.get("sources_summary"):
                     retrieved_chunks.append(result["sources_summary"])
@@ -204,6 +206,10 @@ class ResearchWorkflowGraphParallel:
                         "title": result["title"],
                         "task_id": result["task_id"]
                     })
+                if result.get("status") == "completed" and result.get("summary"):
+                    key_finding = result["summary"][:150].strip()
+                    if key_finding:
+                        accumulated_knowledge.append(f"[{result['title']}] {key_finding}")
             
             # 批量更新数据库
             try:
@@ -218,6 +224,7 @@ class ResearchWorkflowGraphParallel:
                 "task_results": task_results,
                 "retrieved_chunks": retrieved_chunks,
                 "retrieved_documents": retrieved_documents,
+                "accumulated_knowledge": accumulated_knowledge,
                 "updated_at": get_current_utc_time()
             }
             

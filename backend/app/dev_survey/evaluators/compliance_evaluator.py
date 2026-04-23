@@ -5,7 +5,7 @@
 """
 import json
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 from harness.evaluation.base_evaluator import BaseEvaluator
 from harness.evaluation.llm_judge_evaluator import LLMJudgeEvaluator
@@ -39,6 +39,8 @@ class ComplianceEvaluator(BaseEvaluator):
                 report
             )
 
+            scores["citation_coverage"] = self._evaluate_citation_coverage(report)
+
             logger.info(f"[ComplianceEvaluator] Scores: {scores}")
             return scores
 
@@ -46,7 +48,8 @@ class ComplianceEvaluator(BaseEvaluator):
             logger.error(f"[ComplianceEvaluator] Error: {str(e)}, using fallback")
             return {
                 "checklist_coverage": 0.0,
-                "template_compliance": 0.0
+                "template_compliance": 0.0,
+                "citation_coverage": 0.0
             }
 
     async def _evaluate_checklist_coverage(
@@ -181,27 +184,98 @@ class ComplianceEvaluator(BaseEvaluator):
         return {}
 
     async def _evaluate_template_compliance(self, report: str) -> float:
+        if not report:
+            return 0.0
+
         score = 0.0
 
-        if not report:
-            return 0.5
+        has_any_headings = any(
+            line.strip().startswith(("#", "##", "###"))
+            for line in report.split("\n")
+        )
+        if has_any_headings:
+            score += 0.1
 
-        has_headings = any(line.strip().startswith(("#", "##", "###")) for line in report.split("\n"))
-        if has_headings:
+        has_any_lists = any(
+            "- " in line or "* " in line or "1." in line
+            for line in report.split("\n")
+        )
+        if has_any_lists:
+            score += 0.1
+
+        required_sections = [
+            "执行摘要", "决策总结", "参考文献",
+            "executive summary", "decision", "reference"
+        ]
+        heading_texts = [
+            line.strip().lstrip("#").strip().lower()
+            for line in report.split("\n")
+            if line.strip().startswith("#")
+        ]
+        sections_found = sum(
+            1 for section in required_sections
+            if any(section in heading for heading in heading_texts)
+        )
+        score += min(sections_found * 0.1, 0.3)
+
+        has_table_rows, has_table_separator = self._has_markdown_table(report)
+        if has_table_rows:
+            score += 0.1
+        if has_table_separator:
+            score += 0.1
+
+        report_len = len(report)
+        if report_len >= 1000:
+            score += 0.05
+        if report_len >= 2000:
+            score += 0.05
+        if report_len >= 3000:
+            score += 0.05
+
+        if re.search(r'^# ', report, re.MULTILINE):
+            score += 0.05
+        if re.search(r'^## ', report, re.MULTILINE):
+            score += 0.05
+        if re.search(r'^### ', report, re.MULTILINE):
+            score += 0.05
+
+        return min(score, 1.0)
+
+    def _evaluate_citation_coverage(self, report: str) -> float:
+        if not report:
+            return 0.0
+
+        score = 0.0
+
+        if re.search(r'https?://\S+', report):
             score += 0.3
 
-        has_lists = any("- " in line or "* " in line or "1." in line for line in report.split("\n"))
-        if has_lists:
+        if re.search(r'\[\d+\]', report):
             score += 0.2
 
-        report_lower = report.lower()
-        key_elements = ["总结", "结论", "建议", "参考", "引用", "reference", "summary", "conclusion"]
-        has_key_elements = sum(1 for elem in key_elements if elem in report_lower) >= 2
-        if has_key_elements:
+        attribution_keywords = [
+            "来源", "引用", "参考", "出处",
+            "source", "reference", "citation"
+        ]
+        if any(kw in report.lower() for kw in attribution_keywords):
             score += 0.2
 
-        min_length = 500
-        if len(report) >= min_length:
+        reference_headings = ["参考", "引用", "reference"]
+        heading_lines = [
+            line.strip().lstrip("#").strip().lower()
+            for line in report.split("\n")
+            if line.strip().startswith("#")
+        ]
+        if any(rh in heading for rh in reference_headings for heading in heading_lines):
             score += 0.3
 
         return min(score, 1.0)
+
+    def _has_markdown_table(self, report: str) -> Tuple[bool, bool]:
+        lines = report.split("\n")
+        has_table_rows = any(line.count("|") >= 3 for line in lines)
+        has_table_separator = any(
+            "|" in line and bool(re.match(r'^[\s|:\-]+$', line.strip()))
+            for line in lines
+        )
+        return (has_table_rows, has_table_separator)

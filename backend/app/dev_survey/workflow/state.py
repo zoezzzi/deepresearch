@@ -32,3 +32,4 @@ class WorkflowState(TypedDict, total=False):
     citations: Optional[List[str]]
     checklist_items: Optional[List[str]]
     retrieved_documents: Optional[List[Dict[str, Any]]]
+    accumulated_knowledge: Optional[List[str]]

@@ -54,6 +54,10 @@ class HarnessSettings(BaseSettings):
     RESOURCE_CLEANUP_INTERVAL: int = 3600
     MAX_CACHE_AGE: int = 86400
     
+    # Dev Survey 高级功能开关
+    ENABLE_KNOWLEDGE_TRANSFER: bool = False  # 任务间知识传递
+    MAX_REPORT_SELF_CHECK_TRIES: int = 1  # 报告自检最大尝试次数
+    
     @property
     def DATABASE_URL(self) -> str:
         encoded_password = quote_plus(self.POSTGRES_PASSWORD)

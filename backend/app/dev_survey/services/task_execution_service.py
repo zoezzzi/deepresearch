@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import List, Optional, Tuple
 from tenacity import stop_after_attempt, wait_exponential, retry_if_exception_type
 from tenacity.asyncio import AsyncRetrying
 from app.dev_survey.agents import SearchAgent, SummarizerAgent
@@ -13,7 +13,8 @@ class TaskExecutionService:
 
     async def execute_task(
         self,
-        task: Task
+        task: Task,
+        accumulated_knowledge: Optional[List[str]] = None
     ) -> Tuple[str, str, str]:
         logger.info(f"[TaskExecutionService] Executing task: {task.task_id}")
 
@@ -26,11 +27,12 @@ class TaskExecutionService:
         async for attempt in retrying:
             with attempt:
                 try:
-                    search_results = await self.search_agent.execute(task.query)
+                    search_results = await self.search_agent.execute(task.query, intent=task.intent)
 
                     summary, sources_summary, notices = await self.summarizer_agent.execute(
                         task.intent,
-                        search_results
+                        search_results,
+                        accumulated_knowledge=accumulated_knowledge
                     )
 
                     logger.info(f"[TaskExecutionService] Task executed successfully: {task.task_id}")

@@ -39,8 +39,7 @@ class EvaluationService:
         evaluation_id: str,
         scores: Dict[str, float],
         overall_score: float,
-        details: Optional[Dict[str, Any]] = None,
-        failed_metrics: Optional[List[str]] = None
+        details: Optional[Dict[str, Any]] = None
     ) -> EvaluationResult:
         logger.info(f"[EvaluationService] Completing evaluation: {evaluation_id}")
         
@@ -51,8 +50,7 @@ class EvaluationService:
         evaluation.complete(
             metrics=scores,
             overall_score=overall_score,
-            evaluation_details=details,
-            failed_metrics=failed_metrics
+            evaluation_details=details
         )
         
         await self.evaluation_repository.update(evaluation)

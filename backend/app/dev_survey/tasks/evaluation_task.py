@@ -37,8 +37,7 @@ async def run_evaluation_task(
             evaluation_id=evaluation_id,
             scores=result["scores"],
             overall_score=result["overall_score"],
-            details=result.get("details"),
-            failed_metrics=result.get("failed_metrics")
+            details=result.get("details")
         )
 
         logger.info(f"[EvaluationTask] Evaluation completed successfully: {evaluation_id}")

@@ -173,12 +173,12 @@ class EvaluationResult(BaseModel):
     status: EvaluationStatus = EvaluationStatus.PENDING
     
     # 动态指标存储：支持任意场景的评估指标
+    # 失败的指标填充 0.0，确保 metrics 始终包含所有指标
     metrics: Dict[str, float] = Field(default_factory=dict)
     overall_score: Optional[float] = None
     
     error_message: Optional[str] = None
     evaluation_details: Optional[Dict[str, Any]] = None
-    failed_metrics: Optional[List[str]] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -199,14 +199,12 @@ class EvaluationResult(BaseModel):
         self,
         metrics: Dict[str, float],
         overall_score: float,
-        evaluation_details: Optional[Dict[str, Any]] = None,
-        failed_metrics: Optional[List[str]] = None
+        evaluation_details: Optional[Dict[str, Any]] = None
     ) -> None:
         self.status = EvaluationStatus.COMPLETED
         self.metrics = metrics
         self.overall_score = overall_score
         self.evaluation_details = evaluation_details
-        self.failed_metrics = failed_metrics
         
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
