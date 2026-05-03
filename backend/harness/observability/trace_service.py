@@ -12,6 +12,7 @@ from harness.observability.trace_context import (
     generate_span_id,
     set_trace_context,
     get_current_langsmith_run_id,
+    set_current_langsmith_run_id,
 )
 from harness.observability.trace_models import (
     WorkflowTraceCreate,

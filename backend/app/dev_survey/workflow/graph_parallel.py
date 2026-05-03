@@ -22,7 +22,6 @@ from app.dev_survey.repositories import TaskRepository
 from app.dev_survey.events import EventPublisher
 from app.dev_survey.tasks import run_evaluation_task
 from app.dev_survey.workflow.parallel_executor import ParallelTaskExecutor
-from app.dev_survey.workflow.dag_scheduler import DAGTaskScheduler
 from harness.storage.base import ObjectStorage
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
@@ -80,8 +79,6 @@ class ResearchWorkflowGraphParallel:
             max_concurrent_tasks=max_concurrent_tasks,
             trace_service=trace_service
         )
-
-        self.dag_scheduler = DAGTaskScheduler(self.parallel_executor)
 
         self._graph = self._build_graph()
 
@@ -251,34 +248,7 @@ class ResearchWorkflowGraphParallel:
 
         execute_start = time.time()
 
-        has_dependencies = any(
-            t.get("depends_on") and len(t.get("depends_on", [])) > 0
-            for t in task_dicts if t.get("status") == "pending"
-        )
-
-        if has_dependencies:
-            trace_context = get_trace_context()
-            dag_result = await self.dag_scheduler.execute(
-                task_dicts, workflow_id, trace_context=trace_context
-            )
-            task_results_raw = dag_result.results
-            updated_tasks = self._apply_dag_results_to_tasks(task_dicts, task_results_raw)
-            result = {
-                "tasks": updated_tasks,
-                "task_results": task_results_raw,
-            }
-            logger.info(
-                f"[WorkflowParallel] DAG execution completed: {dag_result.levels} levels, "
-                f"{len(dag_result.skipped_task_ids)} skipped"
-            )
-            
-            # 新增：DAG 执行完成后持久化任务状态到数据库
-            try:
-                await self._update_tasks_batch(workflow_id, task_results_raw)
-            except Exception as db_error:
-                logger.error(f"[WorkflowParallel] Failed to update tasks in database: {db_error}")
-        else:
-            result = await self._execute_tasks_parallel(state, task_dicts, workflow_id)
+        result = await self._execute_tasks_parallel(state, task_dicts, workflow_id)
 
         execute_end = time.time()
         execute_duration_ms = int((execute_end - execute_start) * 1000)
@@ -291,29 +261,11 @@ class ResearchWorkflowGraphParallel:
             }
 
         await self._save_to_store(workflow_id, "execute_duration_ms", execute_duration_ms)
+        await self._save_to_store(workflow_id, "task_results", result.get("task_results", []))
 
-        task_results = result.get("task_results", [])
-        await self._save_to_store(workflow_id, "task_results", task_results)
-
-        retrieved_chunks = []
-        retrieved_documents = []
-        accumulated_knowledge = []
-        for tr in task_results:
-            if tr.get("sources_summary"):
-                retrieved_chunks.append(tr["sources_summary"])
-                retrieved_documents.append({
-                    "content": tr["sources_summary"],
-                    "title": tr.get("title", ""),
-                    "task_id": tr.get("task_id", ""),
-                })
-            if tr.get("status") in ("completed", "failed", "skipped") and tr.get("summary"):
-                key_finding = tr["summary"][:150].strip()
-                if key_finding:
-                    accumulated_knowledge.append(f"[{tr.get('title', '')}] {key_finding}")
-
-        await self._save_to_store(workflow_id, "retrieved_chunks", retrieved_chunks)
-        await self._save_to_store(workflow_id, "retrieved_documents", retrieved_documents)
-        await self._save_to_store(workflow_id, "accumulated_knowledge", accumulated_knowledge)
+        await self._save_to_store(workflow_id, "retrieved_chunks", result.get("retrieved_chunks", []))
+        await self._save_to_store(workflow_id, "retrieved_documents", result.get("retrieved_documents", []))
+        await self._save_to_store(workflow_id, "accumulated_knowledge", result.get("accumulated_knowledge", []))
 
         logger.info(
             f"[WorkflowParallel] Execute phase completed: {execute_duration_ms}ms "
@@ -324,21 +276,6 @@ class ResearchWorkflowGraphParallel:
             "tasks": result["tasks"],
             "updated_at": get_current_utc_time()
         }
-
-    def _apply_dag_results_to_tasks(
-        self,
-        task_dicts: List[Dict[str, Any]],
-        task_results_raw: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        result_map = {r["task_id"]: r for r in task_results_raw}
-        updated = []
-        for td in task_dicts:
-            r = result_map.get(td["task_id"])
-            if r:
-                updated.append({**td, "status": r["status"]})
-            else:
-                updated.append(td)
-        return updated
 
     async def _execute_tasks_parallel(self, state: WorkflowState, task_dicts: List[Dict[str, Any]], workflow_id: str) -> Dict[str, Any]:
         pending_dicts = [t for t in task_dicts if t.get("status") == "pending"]
