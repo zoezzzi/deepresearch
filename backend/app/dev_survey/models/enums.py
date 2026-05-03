@@ -10,12 +10,12 @@ class WorkflowStatus(str, Enum):
     REPORT_FAILED = "report_failed"
 
     @classmethod
-    def is_terminal_status(cls, status: "WorkflowStatus") -> bool:
+    def is_terminal_status(cls, status: str) -> bool:
         terminal_statuses = [
-            cls.ALL_SUCCESS,
-            cls.PARTIAL_FAILED,
-            cls.ALL_FAILED,
-            cls.REPORT_FAILED
+            cls.ALL_SUCCESS.value,
+            cls.PARTIAL_FAILED.value,
+            cls.ALL_FAILED.value,
+            cls.REPORT_FAILED.value
         ]
         return status in terminal_statuses
 
@@ -45,6 +45,7 @@ class TaskStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class EvaluationStatus(str, Enum):

@@ -14,6 +14,8 @@ function transformTaskFromBackend(task: any): Task {
     title: task.title,
     intent: task.intent,
     query: task.query,
+    order: task.order,
+    dependsOn: task.depends_on || [],
     status: task.status,
     summary: task.summary,
     sourcesSummary: task.sources_summary,

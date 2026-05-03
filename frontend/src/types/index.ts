@@ -24,7 +24,9 @@ export interface Task {
   title: string
   intent: string
   query: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  order: number
+  dependsOn: string[]
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
   summary?: string
   sourcesSummary?: string
   notices?: string

@@ -52,41 +52,58 @@ export const useResearchStore = defineStore('research', () => {
 
   function startPolling(workflowId: string): void {
     if (pollingInterval.value) return
-    
+
     pollingInterval.value = window.setInterval(async () => {
       try {
         const workflow = await researchApi.getWorkflow(workflowId, selectedScenarioId.value || undefined)
         const currentTasks = currentWorkflow.value?.tasks || []
         let shouldUpdate = false
-        
+
         if (currentWorkflow.value && workflow.status !== currentWorkflow.value.status) {
           shouldUpdate = true
         }
-        
+
         const hasNewReport = workflow.reportUrl && !currentWorkflow.value?.reportUrl
-        
+
         if (workflow.tasks && workflow.tasks.length > 0) {
           if (workflow.tasks.length !== currentTasks.length) {
             shouldUpdate = true
           } else {
-            for (let i = 0; i < workflow.tasks.length; i++) {
-              const newTask = workflow.tasks[i]
-              const oldTask = currentTasks[i]
-              if (newTask.status !== oldTask.status || 
+            const oldTaskMap = new Map(currentTasks.map(t => [t.taskId, t]))
+            for (const newTask of workflow.tasks) {
+              const oldTask = oldTaskMap.get(newTask.taskId)
+              if (!oldTask) {
+                shouldUpdate = true
+                break
+              }
+              if (newTask.status !== oldTask.status ||
                   newTask.summary !== oldTask.summary ||
                   newTask.sourcesSummary !== oldTask.sourcesSummary ||
-                  newTask.notices !== oldTask.notices) {
+                  newTask.notices !== oldTask.notices ||
+                  newTask.startedAt !== oldTask.startedAt ||
+                  newTask.completedAt !== oldTask.completedAt) {
                 shouldUpdate = true
                 break
               }
             }
           }
         }
-        
+
         if (shouldUpdate || hasNewReport) {
           console.log(`[Polling] Workflow updated, refreshing data`)
-          currentWorkflow.value = workflow
-          
+          const updatedTasks = (workflow.tasks || []).map(newTask => {
+            const existing = currentTasks.find(t => t.taskId === newTask.taskId)
+            if (existing) {
+              return { ...existing, ...newTask }
+            }
+            return newTask
+          })
+          currentWorkflow.value = {
+            ...currentWorkflow.value!,
+            ...workflow,
+            tasks: updatedTasks
+          }
+
           if (hasNewReport) {
             await fetchReportContent(workflowId)
           }
@@ -136,13 +153,13 @@ export const useResearchStore = defineStore('research', () => {
         selectedScenarioId.value || undefined
       )
       currentWorkflow.value = workflow
-      
+
       if (workflow.tasks && workflow.tasks.length > 0) {
         console.log(`[ResearchStore] Fetched ${workflow.tasks.length} tasks from backend for workflow ${workflowId}`)
       } else {
         console.log(`[ResearchStore] No tasks found for workflow ${workflowId}, waiting for plan event...`)
       }
-      
+
       if (workflow.reportUrl) {
         await fetchReportContent(workflowId)
       }
@@ -153,10 +170,10 @@ export const useResearchStore = defineStore('research', () => {
       isLoading.value = false
     }
   }
-  
+
   async function fetchReportContent(workflowId: string): Promise<void> {
     if (!currentWorkflow.value?.reportUrl) return
-    
+
     try {
       const content = await researchApi.getReportContent(
         workflowId,
@@ -176,7 +193,28 @@ export const useResearchStore = defineStore('research', () => {
     sseClient.on('plan', (event) => {
       console.log('[SSE] Received plan event with', event.data.tasks?.length || 0, 'tasks')
       if (currentWorkflow.value) {
-        currentWorkflow.value.tasks = event.data.tasks
+        const tasks = Array.isArray(event.data.tasks)
+          ? event.data.tasks.map((t: any) => ({
+              taskId: t.task_id || t.taskId,
+              title: t.title,
+              intent: t.intent,
+              query: t.query,
+              order: t.order,
+              dependsOn: t.depends_on || t.dependsOn || [],
+              status: t.status || 'pending',
+              summary: t.summary,
+              sourcesSummary: t.sources_summary || t.sourcesSummary,
+              notices: t.notices,
+              createdAt: t.created_at || t.createdAt,
+              updatedAt: t.updated_at || t.updatedAt,
+              startedAt: t.started_at || t.startedAt,
+              completedAt: t.completed_at || t.completedAt
+            }))
+          : []
+        currentWorkflow.value = {
+          ...currentWorkflow.value,
+          tasks
+        }
         stopPolling()
       }
     })
@@ -228,11 +266,15 @@ export const useResearchStore = defineStore('research', () => {
   function updateTask(taskId: string, updates: Partial<Task>): void {
     if (!currentWorkflow.value) return
 
-    const taskIndex = currentWorkflow.value.tasks.findIndex(task => task.taskId === taskId)
+    const tasks = currentWorkflow.value.tasks
+    const taskIndex = tasks.findIndex(task => task.taskId === taskId)
     if (taskIndex !== -1) {
-      currentWorkflow.value.tasks[taskIndex] = {
-        ...currentWorkflow.value.tasks[taskIndex],
-        ...updates
+      const updatedTasks = tasks.map((task, index) =>
+        index === taskIndex ? { ...task, ...updates } : task
+      )
+      currentWorkflow.value = {
+        ...currentWorkflow.value,
+        tasks: updatedTasks
       }
     }
   }

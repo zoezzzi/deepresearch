@@ -1,5 +1,5 @@
-from typing import List, Dict, Any
 import aiohttp
+from typing import List, Dict, Any, Optional
 from tenacity import stop_after_attempt, wait_exponential, retry_if_exception_type
 from tenacity.asyncio import AsyncRetrying
 from harness.source_routing.sources.base import SearchSource, SearchResult
@@ -9,7 +9,23 @@ from harness.logger import logger
 class StackOverflowSearchSource(SearchSource):
     def __init__(self):
         self.base_url = "https://api.stackexchange.com/2.3"
+        self._session: Optional[aiohttp.ClientSession] = None
         logger.debug("StackOverflowSearchSource initialized")
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            connector = aiohttp.TCPConnector(
+                limit=10,
+                limit_per_host=5,
+                ttl_dns_cache=300,
+                enable_cleanup_closed=True,
+            )
+            self._session = aiohttp.ClientSession(connector=connector)
+        return self._session
+
+    async def close(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
 
     async def search(self, query: str, **kwargs) -> List[SearchResult]:
         max_results = kwargs.get("max_results", 5)
@@ -35,33 +51,33 @@ class StackOverflowSearchSource(SearchSource):
                     "filter": "withbody"
                 }
                 
-                async with aiohttp.ClientSession() as session:
-                    url = f"{self.base_url}/search/advanced"
+                session = await self._get_session()
+                url = f"{self.base_url}/search/advanced"
+                
+                async with session.get(url, params=params) as response:
+                    if response.status != 200:
+                        logger.error(f"Stack Overflow API returned status {response.status}")
+                        return []
                     
-                    async with session.get(url, params=params) as response:
-                        if response.status != 200:
-                            logger.error(f"Stack Overflow API returned status {response.status}")
-                            return []
+                    data = await response.json()
+                    results = []
+                    
+                    items = data.get("items", [])
+                    for item in items[:max_results]:
+                        title = item.get("title", "")
+                        url = item.get("link", "")
+                        score = item.get("score", 0)
+                        answer_count = item.get("answer_count", 0)
+                        body = item.get("body", "")[:500]
                         
-                        data = await response.json()
-                        results = []
+                        content = f"Score: {score}, Answers: {answer_count}\n{body}"
                         
-                        items = data.get("items", [])
-                        for item in items[:max_results]:
-                            title = item.get("title", "")
-                            url = item.get("link", "")
-                            score = item.get("score", 0)
-                            answer_count = item.get("answer_count", 0)
-                            body = item.get("body", "")[:500]
-                            
-                            content = f"Score: {score}, Answers: {answer_count}\n{body}"
-                            
-                            search_result = SearchResult(
-                                title=title,
-                                url=url,
-                                content=content
-                            )
-                            results.append(search_result)
-                        
-                        logger.info(f"Found {len(results)} results from Stack Overflow")
-                        return results
+                        search_result = SearchResult(
+                            title=title,
+                            url=url,
+                            content=content
+                        )
+                        results.append(search_result)
+                    
+                    logger.info(f"Found {len(results)} results from Stack Overflow")
+                    return results

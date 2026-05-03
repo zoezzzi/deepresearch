@@ -22,14 +22,18 @@ Thumbs.db
 
 # 日志
 backend/logs
+backend/coverage_report
 
 backend/reports
 backend/tests
 backend/requirements.in
+backend/migrations
 
 docs/
 scripts/
-backend/migrations
+
+项目描述.md
+
 
 
 

@@ -1,7 +1,6 @@
-from sqlalchemy import Column, String, Text, Integer, DateTime, Enum, ForeignKey, Float, JSON
+from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, Float, JSON, BigInteger
 from sqlalchemy.orm import relationship
 from .session import Base
-from app.research_assistant.models.enums import WorkflowStatus, TaskStatus, EvaluationStatus
 from app.common.utils.time_utils import get_current_utc_time
 
 
@@ -12,7 +11,7 @@ class WorkflowModel(Base):
     topic = Column(String, nullable=False)
     scenario_id = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)
-    status = Column(Enum(WorkflowStatus), default=WorkflowStatus.PENDING, nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
     report_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)
@@ -31,8 +30,9 @@ class TaskModel(Base):
     title = Column(String, nullable=False)
     intent = Column(Text, nullable=False)
     query = Column(Text, nullable=False)
-    order = Column(Integer, nullable=False)
-    status = Column(Enum(TaskStatus), default=TaskStatus.PENDING, nullable=False)
+    order = Column(Integer, nullable=False, default=0)
+    depends_on = Column(JSON, nullable=True, default=list)
+    status = Column(String(50), nullable=False, default="pending")
     summary = Column(Text, nullable=True)
     sources_summary = Column(Text, nullable=True)
     notices = Column(Text, nullable=True)
@@ -55,7 +55,7 @@ class EvaluationModel(Base):
     metrics = Column(JSON, nullable=False, default=dict)
     overall_score = Column(Float, nullable=True)
     
-    status = Column(Enum(EvaluationStatus), default=EvaluationStatus.PENDING, nullable=False, index=True)
+    status = Column(String(50), default="pending", nullable=False, index=True)
     error_message = Column(Text, nullable=True)
     evaluation_details = Column(JSON, nullable=True)
     
@@ -65,3 +65,63 @@ class EvaluationModel(Base):
     updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False, index=True)
     
     workflow = relationship("WorkflowModel", back_populates="evaluations")
+
+
+class WorkflowTraceModel(Base):
+    __tablename__ = "workflow_trace"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    trace_id = Column(String(64), unique=True, nullable=False, index=True)
+    workflow_id = Column(String(64), unique=True, nullable=False, index=True)
+    request_id = Column(String(64), nullable=True)
+    scenario_id = Column(String(64), nullable=False)
+
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+    status = Column(String(32), nullable=False, default="running", index=True)
+
+    langsmith_run_id = Column(String(64), nullable=True)
+    langsmith_url = Column(String(512), nullable=True)
+
+    execute_duration_ms = Column(Integer, nullable=True)
+
+    input_topic = Column(Text, nullable=True)
+    input_description = Column(Text, nullable=True)
+    output_report_url = Column(String(512), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)
+
+
+class WorkflowTaskTraceModel(Base):
+    __tablename__ = "workflow_task_trace"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    trace_id = Column(String(64), nullable=False, index=True)
+    workflow_id = Column(String(64), nullable=False, index=True)
+    task_id = Column(String(64), nullable=False, index=True)
+    span_id = Column(String(64), unique=True, nullable=False, index=True)
+
+    task_title = Column(String(256), nullable=False)
+    task_order = Column(Integer, nullable=False)
+
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+    status = Column(String(32), nullable=False, default="pending", index=True)
+
+    input_query = Column(Text, nullable=True)
+    input_intent = Column(Text, nullable=True)
+    output_summary = Column(Text, nullable=True)
+    output_sources = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    langsmith_run_id = Column(String(64), nullable=True)
+
+    retry_count = Column(Integer, default=0)
+
+    created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)

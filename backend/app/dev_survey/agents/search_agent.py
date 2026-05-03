@@ -1,3 +1,4 @@
+import asyncio
 from typing import List
 from harness.agents.base import Agent
 from harness.source_routing.sources.factory import get_search_source, get_sources_by_priority
@@ -36,23 +37,37 @@ class SearchAgent(Agent):
         selected_sources = self._select_sources(intent)
         queries = self._generate_search_queries(query, intent)
 
+        search_semaphore = asyncio.Semaphore(10)
+
+        async def search_one(q: str, src):
+            async with search_semaphore:
+                try:
+                    source_name = src.__class__.__name__
+                    logger.info(f"[{self.name}] Searching with {source_name} for: {q}")
+                    results = await src.search(q, max_results=3)
+                    logger.info(f"[{self.name}] Got {len(results)} results from {source_name}")
+                    return results
+                except Exception as e:
+                    logger.warning(f"[{self.name}] Search failed with {src.__class__.__name__}: {str(e)}")
+                    return []
+
+        coroutines = [
+            search_one(q, src)
+            for q in queries
+            for src in selected_sources
+        ]
+
+        results_per_pair = await asyncio.gather(*coroutines, return_exceptions=True)
+
         all_results = []
         seen_urls = set()
-
-        for q in queries:
-            for source in selected_sources:
-                try:
-                    source_name = source.__class__.__name__
-                    logger.info(f"[{self.name}] Searching with {source_name} for: {q}")
-                    results = await source.search(q, max_results=3)
-                    for r in results:
-                        if r.url not in seen_urls:
-                            seen_urls.add(r.url)
-                            all_results.append(r)
-                    logger.info(f"[{self.name}] Got {len(results)} results from {source_name}")
-                except Exception as e:
-                    logger.warning(f"[{self.name}] Search failed with {source.__class__.__name__}: {str(e)}")
-                    continue
+        for results in results_per_pair:
+            if isinstance(results, Exception):
+                continue
+            for r in results:
+                if r.url not in seen_urls:
+                    seen_urls.add(r.url)
+                    all_results.append(r)
 
         logger.info(f"[{self.name}] Found total {len(all_results)} search results")
 

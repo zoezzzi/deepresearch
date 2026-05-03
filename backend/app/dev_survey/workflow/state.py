@@ -10,16 +10,15 @@ from datetime import datetime
 class WorkflowState(TypedDict, total=False):
     """
     调研工作流状态
-    
+
     用于在 LangGraph 工作流节点之间传递状态
+
+    精简原则：仅保留路由必需字段，大字段迁移至 Store
     """
     workflow_id: str
     topic: str
-    description: Optional[str]
     scenario_id: Optional[str]
     tasks: List[Dict[str, Any]]
-    current_task_index: int
-    task_results: List[Dict[str, Any]]
     report_content: Optional[str]
     report_url: Optional[str]
     error: Optional[str]
@@ -27,9 +26,5 @@ class WorkflowState(TypedDict, total=False):
     updated_at: datetime
     workflow_status: Optional[str]
     task_summary: Optional[Dict[str, int]]
-    retrieved_chunks: Optional[List[str]]
     sub_questions: Optional[List[str]]
-    citations: Optional[List[str]]
-    checklist_items: Optional[List[str]]
-    retrieved_documents: Optional[List[Dict[str, Any]]]
-    accumulated_knowledge: Optional[List[str]]
+    reflection_round: int

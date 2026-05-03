@@ -10,7 +10,7 @@ from harness.logger import logger
 from app.infrastructure.db.session import init_db
 from harness.db.async_pool import init_connection_pool, close_connection_pool, get_pool_stats, check_pool_health
 from app.research_assistant.workflow.saver import setup_checkpointer, get_saver_manager
-from api.controllers import research_router
+from api.controllers import research_router, trace_router
 
 from app.config import get_app_settings
 from app.scenarios.manager import register_enabled_scenarios
@@ -142,6 +142,7 @@ app.add_middleware(
 )
 
 app.include_router(research_router)
+app.include_router(trace_router)
 
 
 @app.get("/")

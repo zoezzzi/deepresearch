@@ -1,7 +1,6 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
-from app.research_assistant.models.enums import WorkflowStatus
 
 
 class CreateResearchRequest(BaseModel):
@@ -9,7 +8,8 @@ class CreateResearchRequest(BaseModel):
     description: Optional[str] = Field(None, description="调研描述")
     scenario_id: Optional[str] = Field(None, description="场景标识符")
 
-    @validator('topic', pre=True)
+    @field_validator('topic', mode='before')
+    @classmethod
     def validate_topic(cls, v):
         if v is None or (isinstance(v, str) and v.strip() == ''):
             raise ValueError('Topic cannot be empty')
@@ -37,7 +37,7 @@ class WorkflowResponse(BaseModel):
     topic: str = Field(..., description="调研主题")
     scenario_id: str = Field(..., description="场景标识符")
     description: Optional[str] = Field(None, description="调研描述")
-    status: WorkflowStatus = Field(..., description="工作流状态")
+    status: str = Field(..., description="工作流状态")
     report_url: Optional[str] = Field(None, description="报告URL")
     created_at: datetime = Field(..., description="创建时间")
     updated_at: datetime = Field(..., description="更新时间")

@@ -21,6 +21,7 @@ from harness.storage.base import ObjectStorage
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
 from harness.config import get_harness_settings
+from harness.observability.trace_service import TraceService
 from app.common.utils.time_utils import get_current_utc_time
 
 settings = get_harness_settings()
@@ -45,7 +46,8 @@ class ResearchWorkflowGraph:
         task_repository: TaskRepository,
         object_storage: ObjectStorage,
         evaluation_service: EvaluationService,
-        evaluation_orchestrator: EvaluationOrchestrator
+        evaluation_orchestrator: EvaluationOrchestrator,
+        trace_service: TraceService = None
     ):
         self.research_plan_service = research_plan_service
         self.task_execution_service = task_execution_service
@@ -55,6 +57,7 @@ class ResearchWorkflowGraph:
         self.object_storage = object_storage
         self.evaluation_service = evaluation_service
         self.evaluation_orchestrator = evaluation_orchestrator
+        self.trace_service = trace_service
         self._graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:

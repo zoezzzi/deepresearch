@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
-from app.research_assistant.models.enums import WorkflowStatus, TaskStatus, EvaluationStatus
+from app.dev_survey.models.enums import WorkflowStatus, TaskStatus, EvaluationStatus
 from app.common.utils.time_utils import get_current_utc_time
 
 
@@ -16,7 +16,8 @@ class Task(BaseModel):
     intent: str
     query: str
     order: int
-    status: TaskStatus = TaskStatus.PENDING
+    depends_on: List[str] = Field(default_factory=list)
+    status: str = Field(default="pending")
     summary: Optional[str] = None
     sources_summary: Optional[str] = None
     notices: Optional[str] = None
@@ -32,12 +33,12 @@ class Task(BaseModel):
             self.updated_at = get_current_utc_time()
 
     def start(self) -> None:
-        self.status = TaskStatus.RUNNING
+        self.status = TaskStatus.RUNNING.value
         self.started_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
     def complete(self, summary: str, sources_summary: str, notices: str) -> None:
-        self.status = TaskStatus.COMPLETED
+        self.status = TaskStatus.COMPLETED.value
         self.summary = summary
         self.sources_summary = sources_summary
         self.notices = notices
@@ -45,7 +46,7 @@ class Task(BaseModel):
         self.updated_at = get_current_utc_time()
 
     def fail(self, error_message: Optional[str] = None) -> None:
-        self.status = TaskStatus.FAILED
+        self.status = TaskStatus.FAILED.value
         self.updated_at = get_current_utc_time()
 
 
@@ -54,7 +55,7 @@ class Workflow(BaseModel):
     topic: str
     scenario_id: str
     description: Optional[str] = None
-    status: WorkflowStatus = WorkflowStatus.PENDING
+    status: str = Field(default="pending")
     report_url: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -73,51 +74,51 @@ class Workflow(BaseModel):
         self.updated_at = get_current_utc_time()
 
     def start(self) -> None:
-        if self.status != WorkflowStatus.PENDING:
+        if self.status != WorkflowStatus.PENDING.value:
             raise InvalidWorkflowStateError(
-                f"Cannot start workflow from {self.status.value} status"
+                f"Cannot start workflow from {self.status} status"
             )
-        self.status = WorkflowStatus.RUNNING
+        self.status = WorkflowStatus.RUNNING.value
         self.started_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
     def mark_all_success(self, report_url: Optional[str] = None) -> None:
-        if self.status != WorkflowStatus.RUNNING:
+        if self.status != WorkflowStatus.RUNNING.value:
             raise InvalidWorkflowStateError(
-                f"Cannot mark all_success from {self.status.value} status"
+                f"Cannot mark all_success from {self.status} status"
             )
-        self.status = WorkflowStatus.ALL_SUCCESS
+        self.status = WorkflowStatus.ALL_SUCCESS.value
         if report_url:
             self.report_url = report_url
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
     def mark_partial_failed(self, report_url: Optional[str] = None) -> None:
-        if self.status != WorkflowStatus.RUNNING:
+        if self.status != WorkflowStatus.RUNNING.value:
             raise InvalidWorkflowStateError(
-                f"Cannot mark partial_failed from {self.status.value} status"
+                f"Cannot mark partial_failed from {self.status} status"
             )
-        self.status = WorkflowStatus.PARTIAL_FAILED
+        self.status = WorkflowStatus.PARTIAL_FAILED.value
         if report_url:
             self.report_url = report_url
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
     def mark_all_failed(self) -> None:
-        if self.status != WorkflowStatus.RUNNING:
+        if self.status != WorkflowStatus.RUNNING.value:
             raise InvalidWorkflowStateError(
-                f"Cannot mark all_failed from {self.status.value} status"
+                f"Cannot mark all_failed from {self.status} status"
             )
-        self.status = WorkflowStatus.ALL_FAILED
+        self.status = WorkflowStatus.ALL_FAILED.value
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
     def mark_report_failed(self) -> None:
-        if self.status != WorkflowStatus.RUNNING:
+        if self.status != WorkflowStatus.RUNNING.value:
             raise InvalidWorkflowStateError(
-                f"Cannot mark report_failed from {self.status.value} status"
+                f"Cannot mark report_failed from {self.status} status"
             )
-        self.status = WorkflowStatus.REPORT_FAILED
+        self.status = WorkflowStatus.REPORT_FAILED.value
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
@@ -126,21 +127,21 @@ class Workflow(BaseModel):
 
     def is_success(self) -> bool:
         return self.status in [
-            WorkflowStatus.ALL_SUCCESS,
-            WorkflowStatus.PARTIAL_FAILED
+            WorkflowStatus.ALL_SUCCESS.value,
+            WorkflowStatus.PARTIAL_FAILED.value
         ]
 
     def has_report(self) -> bool:
         return self.report_url is not None
 
     def get_pending_tasks(self) -> List[Task]:
-        return [task for task in self.tasks if task.status == TaskStatus.PENDING]
+        return [task for task in self.tasks if task.status == TaskStatus.PENDING.value]
 
     def get_running_tasks(self) -> List[Task]:
-        return [task for task in self.tasks if task.status == TaskStatus.RUNNING]
+        return [task for task in self.tasks if task.status == TaskStatus.RUNNING.value]
 
     def get_completed_tasks(self) -> List[Task]:
-        return [task for task in self.tasks if task.status == TaskStatus.COMPLETED]
+        return [task for task in self.tasks if task.status == TaskStatus.COMPLETED.value]
 
 
 class ResearchReport(BaseModel):
@@ -170,7 +171,7 @@ class EvaluationResult(BaseModel):
     evaluation_id: str
     workflow_id: str
     scenario_id: Optional[str] = None
-    status: EvaluationStatus = EvaluationStatus.PENDING
+    status: str = Field(default="pending")
     
     # 动态指标存储：支持任意场景的评估指标
     # 失败的指标填充 0.0，确保 metrics 始终包含所有指标
@@ -191,7 +192,7 @@ class EvaluationResult(BaseModel):
             self.updated_at = get_current_utc_time()
 
     def start(self) -> None:
-        self.status = EvaluationStatus.IN_PROGRESS
+        self.status = EvaluationStatus.IN_PROGRESS.value
         self.started_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()
 
@@ -201,7 +202,7 @@ class EvaluationResult(BaseModel):
         overall_score: float,
         evaluation_details: Optional[Dict[str, Any]] = None
     ) -> None:
-        self.status = EvaluationStatus.COMPLETED
+        self.status = EvaluationStatus.COMPLETED.value
         self.metrics = metrics
         self.overall_score = overall_score
         self.evaluation_details = evaluation_details
@@ -210,7 +211,7 @@ class EvaluationResult(BaseModel):
         self.updated_at = get_current_utc_time()
 
     def fail(self, error_message: str) -> None:
-        self.status = EvaluationStatus.FAILED
+        self.status = EvaluationStatus.FAILED.value
         self.error_message = error_message
         self.completed_at = get_current_utc_time()
         self.updated_at = get_current_utc_time()

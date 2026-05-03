@@ -14,7 +14,6 @@ from app.scenarios.dev_survey.config import (
 from app.infrastructure.db.session import SessionLocal
 from app.service_factory import create_dev_survey_service
 from app.dev_survey.models.dtos import CreateResearchRequest
-from harness.logger import logger
 
 
 class DevSurveyExecutor(ScenarioExecutor):
@@ -39,37 +38,82 @@ class DevSurveyExecutor(ScenarioExecutor):
         try:
             service = create_dev_survey_service(db, REPORT_URL_PREFIX)
             return await service.create_research_workflow(request)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass
     
     async def execute_workflow(self, workflow_id: UUID) -> None:
         db = self._get_db()
         try:
             service = create_dev_survey_service(db, REPORT_URL_PREFIX)
             await service.execute_research_workflow(workflow_id)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass
     
     async def get_workflow_status(self, workflow_id: UUID) -> any:
         db = self._get_db()
         try:
             service = create_dev_survey_service(db, REPORT_URL_PREFIX)
             return await service.get_workflow_status(workflow_id)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass
     
     async def get_report_content(self, workflow_id: UUID) -> str | None:
         db = self._get_db()
         try:
             service = create_dev_survey_service(db, REPORT_URL_PREFIX)
             return await service.get_report_content(workflow_id)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass
     
     def get_report_file_path(self, report_id: str) -> str | None:
         db = self._get_db()
         try:
             service = create_dev_survey_service(db, REPORT_URL_PREFIX)
             return service.get_report_file_path(report_id)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
-            db.close()
+            try:
+                db.close()
+            except Exception:
+                pass

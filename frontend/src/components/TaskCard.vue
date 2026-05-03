@@ -39,6 +39,7 @@ const statusClass = computed(() => {
   if (props.task.status === 'completed') return 'success'
   if (props.task.status === 'failed') return 'error'
   if (props.task.status === 'running') return 'running'
+  if (props.task.status === 'skipped') return 'skipped'
   return 'pending'
 })
 
@@ -46,6 +47,7 @@ const statusText = computed(() => {
   if (props.task.status === 'completed') return '已完成'
   if (props.task.status === 'failed') return '失败'
   if (props.task.status === 'running') return '进行中'
+  if (props.task.status === 'skipped') return '跳过'
   return '等待中'
 })
 
@@ -53,6 +55,7 @@ const statusIcon = computed(() => {
   if (props.task.status === 'completed') return '✓'
   if (props.task.status === 'failed') return '✗'
   if (props.task.status === 'running') return '⚡'
+  if (props.task.status === 'skipped') return '⊘'
   return '○'
 })
 </script>
@@ -84,6 +87,12 @@ const statusIcon = computed(() => {
 .task-card.error {
   border-color: #fc8181;
   background: #fff5f5;
+}
+
+.task-card.skipped {
+  border-color: #cbd5e0;
+  background: #f7fafc;
+  opacity: 0.5;
 }
 
 @keyframes pulse {
@@ -133,6 +142,11 @@ const statusIcon = computed(() => {
   color: white;
 }
 
+.task-card.skipped .task-icon {
+  background: #cbd5e0;
+  color: #718096;
+}
+
 .task-status {
   font-size: 0.75rem;
   font-weight: 600;
@@ -158,6 +172,11 @@ const statusIcon = computed(() => {
 .task-status.error {
   background: #fed7d7;
   color: #c53030;
+}
+
+.task-status.skipped {
+  background: #e2e8f0;
+  color: #718096;
 }
 
 .task-title {

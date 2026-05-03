@@ -1,4 +1,4 @@
-from .workflow_repository_impl import WorkflowRepositoryImpl
-from .task_repository_impl import TaskRepositoryImpl
+from .base_workflow_repository import BaseWorkflowRepository
+from .base_task_repository import BaseTaskRepository
 
-__all__ = ["WorkflowRepositoryImpl", "TaskRepositoryImpl"]
+__all__ = ["BaseWorkflowRepository", "BaseTaskRepository"]

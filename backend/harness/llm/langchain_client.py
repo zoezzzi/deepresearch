@@ -4,11 +4,13 @@ import asyncio
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
+from langchain_core.runnables import RunnableConfig
 from tenacity import stop_after_attempt, wait_exponential, retry_base, RetryError
 from tenacity.asyncio import AsyncRetrying
 from harness.llm.base import LLMClient
 from harness.config import get_harness_settings
 from harness.logger import logger
+from harness.observability.trace_context import trace_id_var, workflow_id_var, span_id_var
 
 settings = get_harness_settings()
 
@@ -124,7 +126,17 @@ class LangChainClient(LLMClient):
         for attempt in range(max_attempts):
             try:
                 client = self._get_client(model=model, temperature=temperature, timeout=timeout)
-                response = await client.ainvoke(langchain_messages)
+                
+                config = RunnableConfig(
+                    metadata={
+                        "trace_id": trace_id_var.get(),
+                        "workflow_id": workflow_id_var.get(),
+                        "span_id": span_id_var.get(),
+                    },
+                    tags=["deepresearch"]
+                )
+                
+                response = await client.ainvoke(langchain_messages, config=config)
                 
                 result = self._parse_response(response)
                 if result:

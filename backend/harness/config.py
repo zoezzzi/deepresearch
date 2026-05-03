@@ -57,6 +57,7 @@ class HarnessSettings(BaseSettings):
     # Dev Survey 高级功能开关
     ENABLE_KNOWLEDGE_TRANSFER: bool = False  # 任务间知识传递
     MAX_REPORT_SELF_CHECK_TRIES: int = 1  # 报告自检最大尝试次数
+    ENABLE_REFLECTION: bool = False  # 自反思模块启用
     
     @property
     def DATABASE_URL(self) -> str:
