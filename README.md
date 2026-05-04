@@ -40,18 +40,7 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 架构改进
-
-**重构前 (5 层)**:
-
-- API → Application → Domain → Infrastructure
-- 问题：层级过深，Entity/DTO/VO 重复定义，概念重叠
-
-**重构后 (3 层)**:
-
-- API → Core → Infrastructure
-- 改进：层级清晰，使用 Pydantic 统一数据模型，去除过度抽象
-- 代码量减少约 30%，171 个测试全部通过
+###
 
 ### 技术栈
 
@@ -144,8 +133,8 @@ source venv/bin/activate
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动后端服务 (Windows 平台使用 run_server.py)
-python run_server.py
+# 启动后端服务 
+python main.py
 ```
 
 后端服务将在 `http://localhost:8000` 启动，API 文档可访问：
@@ -165,7 +154,7 @@ npm install
 npm run dev
 ```
 
-前端服务将在 `http://localhost:5173` 启动。
+前端服务将在 `http://localhost:3000 `启动。
 
 ## API 端点
 
@@ -195,161 +184,6 @@ npm run dev
 | `result`        | 报告生成完成                 |
 | `error`         | 工作流或子任务失败              |
 
-## 项目结构
-
-```
-research-assistant/
-├── backend/
-│   ├── api/                          # 接口层
-│   │   ├── controllers/              # 控制器
-│   │   │   └── research_controller.py
-│   │   ├── models/                   # API 模型
-│   │   ├── dependencies.py           # 依赖注入
-│   │   └── __init__.py
-│   ├── core/                         # 核心层 (合并 Application + Domain)
-│   │   ├── models/                   # 数据模型 (Pydantic)
-│   │   │   ├── enums.py              # 枚举类型
-│   │   │   ├── models.py             # 核心实体
-│   │   │   └── dtos.py               # 数据传输对象
-│   │   ├── services/                 # 业务服务
-│   │   │   ├── research_service.py   # 研究主服务
-│   │   │   ├── research_plan_service.py
-│   │   │   ├── task_execution_service.py
-│   │   │   ├── report_generation_service.py
-│   │   │   └── evaluation_service.py
-│   │   ├── agents/                   # AI Agent 实现
-│   │   │   ├── base.py
-│   │   │   ├── plan_agent.py         # 规划 Agent
-│   │   │   ├── search_agent.py       # 搜索 Agent
-│   │   │   ├── summarizer_agent.py   # 摘要 Agent
-│   │   │   └── generate_agent.py     # 报告生成 Agent
-│   │   ├── workflow/                 # 工作流编排 (LangGraph)
-│   │   │   ├── graph.py              # 工作流图定义
-│   │   │   ├── saver.py              # 状态持久化
-│   │   │   └── state.py              # 工作流状态
-│   │   ├── events/                   # 事件发布 (SSE)
-│   │   │   ├── event_publisher.py
-│   │   │   └── event_types.py
-│   │   ├── tasks/                    # 异步任务
-│   │   │   └── evaluation_task.py    # 评估任务
-│   │   ├── repositories/             # 仓储接口
-│   │   │   ├── evaluation_repository.py
-│   │   │   ├── task_repository.py
-│   │   │   └── workflow_repository.py
-│   │   ├── service_factory.py        # 服务工厂
-│   │   └── __init__.py
-│   ├── infrastructure/               # 基础设施层
-│   │   ├── db/                       # 数据库
-│   │   │   ├── repositories/         # 仓储实现
-│   │   │   │   ├── evaluation_repository_impl.py
-│   │   │   │   ├── task_repository_impl.py
-│   │   │   │   └── workflow_repository_impl.py
-│   │   │   ├── async_pool.py         # 异步连接池
-│   │   │   ├── models.py             # 数据库模型
-│   │   │   └── session.py            # 会话管理
-│   │   ├── evaluation/               # 评估模块
-│   │   │   ├── base_evaluator.py     # 评估器基类
-│   │   │   ├── llm_judge_evaluator.py # LLM-as-Judge 评估器
-│   │   │   ├── orchestrator.py       # 评估编排器
-│   │   │   ├── ragas_evaluator.py    # RAGAS 评估器
-│   │   │   └── rule_evaluator.py     # 规则评估器
-│   │   ├── llm/                      # LLM 客户端
-│   │   │   ├── base.py
-│   │   │   ├── factory.py
-│   │   │   └── langchain_client.py
-│   │   ├── search/                   # 搜索源
-│   │   │   ├── base.py
-│   │   │   ├── factory.py
-│   │   │   └── tavily_source.py
-│   │   ├── sse/                      # SSE 管理器
-│   │   │   └── manager.py
-│   │   ├── storage/                  # 对象存储
-│   │   │   ├── base.py
-│   │   │   ├── local_storage.py
-│   │   │   └── minio_client.py
-│   │   ├── config.py                 # 配置管理
-│   │   ├── logger.py                 # 日志配置
-│   │   └── __init__.py
-│   ├── tests/                        # 测试目录
-│   │   ├── unit/                     # 单元测试
-│   │   │   ├── models/               # 模型测试
-│   │   │   ├── services/             # 服务测试
-│   │   │   ├── agents/               # Agent 测试
-│   │   │   ├── workflow/             # 工作流测试
-│   │   │   └── events/               # 事件测试
-│   ├── common/                       # 公共模块
-│   │   ├── utils/
-│   │   ├── config.py
-│   │   ├── exceptions.py
-│   │   └── logger.py
-│   ├── main.py                       # FastAPI 入口
-│   ├── .env.example                  # 环境变量示例
-│   ├── requirements.txt              # 生产依赖
-├── frontend/                         # 前端代码
-│   ├── src/
-│   │   ├── api/                      # API 客户端
-│   │   │   ├── client.ts
-│   │   │   └── sse.ts
-│   │   ├── components/               # 组件
-│   │   │   └── TaskCard.vue
-│   │   ├── router/                   # 路由
-│   │   │   └── index.ts
-│   │   ├── stores/                   # 状态管理 (Pinia)
-│   │   │   └── research.ts
-│   │   ├── types/                    # TypeScript 类型
-│   │   │   └── index.ts
-│   │   ├── views/                    # 页面
-│   │   │   ├── ResearchForm.vue
-│   │   │   ├── TaskBoard.vue
-│   │   │   └── ReportPreview.vue
-│   │   ├── App.vue
-│   │   └── main.ts
-│   ├── package.json
-│   └── vite.config.ts
-├── docker-compose.yml                # Docker Compose 配置
-└── README.md
-```
-
-## 核心层 (Core) 说明
-
-Core 层是重构后的核心，合并了原有的 Application 和 Domain 层：
-
-### Models
-
-使用 Pydantic 模型统一替代传统的 Entity + Value Object + DTO：
-
-- `Workflow` - 工作流实体，包含状态转换方法
-- `Task` - 任务实体，管理任务生命周期
-- `ResearchReport` - 研究报告
-- `EvaluationResult` - 评估结果
-
-### Services
-
-业务逻辑实现：
-
-- `ResearchService` - 研究主服务，协调整个工作流
-- `ResearchPlanService` - 生成研究计划
-- `TaskExecutionService` - 执行任务（搜索+摘要）
-- `ReportGenerationService` - 生成研究报告
-- `EvaluationService` - 评估服务
-
-### Agents
-
-AI 代理，封装与 LLM 的交互：
-
-- `PlanAgent` - 分析主题，生成子任务
-- `SearchAgent` - 执行搜索查询
-- `SummarizerAgent` - 总结搜索结果
-- `GenerateAgent` - 生成最终报告
-
-### Workflow
-
-使用 LangGraph 编排工作流：
-
-- `ResearchWorkflowGraph` - 定义工作流图
-- 节点：plan → execute\_task → generate\_report
-- 支持状态持久化和恢复
-
 ## 设计原则
 
 本项目遵循以下设计原则：
@@ -364,12 +198,52 @@ AI 代理，封装与 LLM 的交互：
 
 ## 开发指南
 
+### 添加新的场景
+
+项目采用场景化架构，添加新场景（如学术研究、市场分析等）只需 3 步：
+
+**步骤 1：创建场景目录和文件**
+
+在 `app/scenarios/` 下创建新场景目录，包含 3 个文件：
+
+```
+app/scenarios/
+├── your_scenario/
+│   ├── __init__.py      # 场景注册函数
+│   ├── config.py         # 场景配置（ID、名称、UI配置等）
+│   └── executor.py       # 场景执行器（实现 ScenarioExecutor 协议）
+```
+
+**步骤 2：实现场景代码**
+
+参考现有场景 `dev_survey` 或 `research_assistant`，复制其结构并修改：
+
+- `config.py`：定义场景 ID、名称、API 路由前缀、UI 配置
+- `executor.py`：实现 `ScenarioExecutor` 协议，绑定对应的 Service
+- `__init__.py`：创建 Executor 实例并注册到 `ScenarioRegistry`
+
+**步骤 3：注册并启用场景**
+
+1. 在 `app/scenarios/manager.py` 的 `_SCENARIO_REGISTRY` 中添加场景：
+```python
+_SCENARIO_REGISTRY: Dict[str, Callable[[], None]] = {
+    "research_assistant_v1": register_research_assistant,
+    "dev_survey": register_dev_survey,
+    "your_scenario": register_your_scenario,  # 新增
+}
+```
+
+2. 在 `.env` 或配置中添加场景 ID：
+```
+ENABLED_SCENARIOS=research_assistant_v1,dev_survey,your_scenario
+```
+
 ### 添加新的 Agent
 
-1. 在 `core/agents/` 中创建新的 Agent 类，继承自 `Agent`
-2. 在 `core/services/` 中创建对应的领域服务
-3. 在 `core/workflow/graph.py` 中添加新的工作流节点
-4. 在 `api/dependencies.py` 中添加依赖注入
+1. 在场景目录下创建 Agent 类，继承自 `Agent`
+2. 在场景的 Service 中创建对应的领域服务
+3. 在场景的 workflow 中添加新的工作流节点
+4. 在场景的 executor 中添加依赖注入
 
 ### 添加新的搜索源
 
@@ -377,17 +251,6 @@ AI 代理，封装与 LLM 的交互：
 2. 在 `infrastructure/search/factory.py` 中注册新的搜索源
 3. 在 `infrastructure/config.py` 中添加配置
 
-### 运行测试
-
-```bash
-cd backend
-
-# 运行所有测试
-python -m pytest tests -v
-
-# 只运行单元测试
-python -m pytest tests/unit -v
-```
 
 ### 评估模块
 
@@ -408,4 +271,3 @@ python -m pytest tests/unit -v
 ## 许可证
 
 Apache License
-
