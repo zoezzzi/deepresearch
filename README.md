@@ -6,7 +6,7 @@
 
 ### 三层轻量级整洁架构
 
-重构后的架构采用三层设计，合并了原有的 Application 和 Domain 层为 Core 层，去除过度抽象，提高代码可维护性：
+重构后的架构采用三层设计，设计Harness通用能力层与App场景自治层分离模式，提高代码可维护性：
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -225,6 +225,7 @@ app/scenarios/
 **步骤 3：注册并启用场景**
 
 1. 在 `app/scenarios/manager.py` 的 `_SCENARIO_REGISTRY` 中添加场景：
+
 ```python
 _SCENARIO_REGISTRY: Dict[str, Callable[[], None]] = {
     "research_assistant_v1": register_research_assistant,
@@ -233,7 +234,8 @@ _SCENARIO_REGISTRY: Dict[str, Callable[[], None]] = {
 }
 ```
 
-2. 在 `.env` 或配置中添加场景 ID：
+1. 在 `.env` 或配置中添加场景 ID：
+
 ```
 ENABLED_SCENARIOS=research_assistant_v1,dev_survey,your_scenario
 ```
@@ -250,7 +252,6 @@ ENABLED_SCENARIOS=research_assistant_v1,dev_survey,your_scenario
 1. 在 `infrastructure/search/` 中实现搜索源接口
 2. 在 `infrastructure/search/factory.py` 中注册新的搜索源
 3. 在 `infrastructure/config.py` 中添加配置
-
 
 ### 评估模块
 
