@@ -271,4 +271,4 @@ ENABLED_SCENARIOS=research_assistant_v1,dev_survey,your_scenario
 
 ## 许可证
 
-Apache License
+MIT License
