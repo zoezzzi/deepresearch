@@ -22,7 +22,7 @@ from app.research_assistant.services import (
 )
 from app.research_assistant.repositories import WorkflowRepository, TaskRepository
 from app.research_assistant.agents import PlanAgent, SearchAgent, SummarizerAgent, GenerateAgent
-from harness.llm.factory import get_llm_client
+from harness.llm.factory import get_llm_client, remove_llm_client
 from harness.source_routing.sources.factory import get_search_source
 from harness.storage.local_storage import LocalObjectStorage
 from harness.evaluation.orchestrator import EvaluationOrchestrator
@@ -78,6 +78,10 @@ class ResearchService:
         
         self.saver_manager = get_saver_manager()
         logger.info("Using AsyncPostgresSaverManager for workflow state persistence")
+
+    async def cleanup(self):
+        await remove_llm_client()
+        logger.info("[ResearchService] LLM client cache removed")
 
     async def create_research_workflow(self, request: CreateResearchRequest) -> WorkflowResponse:
         logger.info(f"[ResearchService] Creating research workflow for topic: {request.topic}")

@@ -43,6 +43,7 @@ class LangChainClient(LLMClient):
             self.base_url = settings.QWEN_BASE_URL
         
         self._client = None
+        self._closed = False
         self._client_params = {
             'model': self.model,
             'api_key': self.api_key,
@@ -54,6 +55,8 @@ class LangChainClient(LLMClient):
         logger.debug(f"LangChainClient initialized with model: {self.model}")
     
     def _get_client(self, **override_params) -> ChatOpenAI:
+        if self._closed:
+            raise RuntimeError("[LangChainClient] Client has been closed")
         current_params = {**self._client_params, **override_params}
         
         if (self._client is None or 
@@ -70,7 +73,14 @@ class LangChainClient(LLMClient):
             logger.debug(f"[LangChainClient] Created new client instance with model: {current_params['model']}")
         
         return self._client
-    
+
+    async def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._client = None
+        logger.debug("[LangChainClient] Closed, underlying resources released")
+
     def _convert_messages(self, messages: List[Dict[str, str]]) -> List[BaseMessage]:
         langchain_messages = []
         for msg in messages:

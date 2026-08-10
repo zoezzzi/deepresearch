@@ -122,6 +122,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"关闭异步数据库连接池时出错: {e}")
     
+    try:
+        from harness.llm.factory import clear_llm_client_cache
+        await clear_llm_client_cache()
+        logger.info("LLM 客户端缓存已清理")
+    except Exception as e:
+        logger.error(f"清理 LLM 客户端缓存时出错: {e}")
+    
     logger.info("=" * 60)
     logger.info("应用关闭完成")
     logger.info("=" * 60)

@@ -32,12 +32,13 @@ backend/migrations
 docs/
 scripts/
 
-项目描述.md
 
 
-
-
-pytest.ini
+backend/.coverage
+backend/pytest.ini
 requirements-test.txt
+
+.gitignore
+
 
 

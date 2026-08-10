@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.infrastructure.db.session import SessionLocal
 from app.infrastructure.db.repositories.evaluation_repository_impl import EvaluationRepositoryImpl
 from harness.events.manager import SSEConnectionManager
-from harness.llm.factory import get_llm_client
+from harness.llm.factory import get_llm_client, clear_llm_client_cache, remove_llm_client
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 
 from app.research_assistant.repositories import (
@@ -181,3 +181,16 @@ def create_dev_survey_service(db: Session, report_url_prefix: str):
         trace_service_factory=_get_dev_survey_trace_service,
         store_factory=_get_dev_survey_store,
     )
+
+
+async def invalidate_llm_client_cache():
+    await clear_llm_client_cache()
+    _get_dev_survey_plan_agent.cache_clear()
+    _get_dev_survey_search_agent.cache_clear()
+    _get_dev_survey_summarizer_agent.cache_clear()
+    _get_dev_survey_generate_agent.cache_clear()
+    _get_dev_survey_critic_agent.cache_clear()
+    get_research_assistant_evaluation_orchestrator.cache_clear()
+    get_dev_survey_evaluation_orchestrator.cache_clear()
+    get_evaluation_orchestrator.cache_clear()
+    logger.info("[ServiceFactory] All LLM-related caches invalidated")

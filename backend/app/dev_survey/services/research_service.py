@@ -23,7 +23,7 @@ from app.dev_survey.services import (
 from app.dev_survey.repositories import WorkflowRepository, TaskRepository
 from app.dev_survey.agents import PlanAgent, SearchAgent, SummarizerAgent, GenerateAgent
 from app.dev_survey.agents.critic_agent import CriticAgent
-from harness.llm.factory import get_llm_client
+from harness.llm.factory import get_llm_client, remove_llm_client
 from harness.source_routing.sources.factory import get_search_source
 from harness.storage.local_storage import LocalObjectStorage
 from harness.evaluation.orchestrator import EvaluationOrchestrator
@@ -273,6 +273,24 @@ class ResearchService:
             self._saver_manager = get_saver_manager()
             logger.info("Using AsyncPostgresSaverManager for workflow state persistence")
         return self._saver_manager
+
+    async def cleanup(self):
+        self._plan_agent = None
+        self._search_agent = None
+        self._summarizer_agent = None
+        self._generate_agent = None
+        self._critic_agent = None
+        self._event_publisher = None
+        self._object_storage = None
+        self._trace_service = None
+        self._store = None
+        self._research_plan_service = None
+        self._task_execution_service = None
+        self._report_generation_service = None
+        self._workflow_graph = None
+        self._saver_manager = None
+        await remove_llm_client()
+        logger.info("[ResearchService] Service cleaned up, LLM client cache removed")
 
     # --- 业务方法 ---
 
