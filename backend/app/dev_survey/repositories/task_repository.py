@@ -17,6 +17,10 @@ class TaskRepository(ABC):
         pass
 
     @abstractmethod
+    async def find_by_ids(self, task_ids: List[str]) -> List[Task]:
+        pass
+
+    @abstractmethod
     async def find_by_workflow_id(self, workflow_id: str) -> List[Task]:
         pass
 

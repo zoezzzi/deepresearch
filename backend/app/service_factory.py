@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.infrastructure.db.session import SessionLocal
 from app.infrastructure.db.repositories.evaluation_repository_impl import EvaluationRepositoryImpl
+from app.infrastructure.db.repositories.trace_repository_impl import TraceRepositoryImpl
 from harness.events.manager import SSEConnectionManager
 from harness.llm.factory import get_llm_client, clear_llm_client_cache, remove_llm_client
 from harness.evaluation.orchestrator import EvaluationOrchestrator
@@ -31,9 +32,8 @@ from app.dev_survey.agents import PlanAgent, SearchAgent, SummarizerAgent, Gener
 from app.dev_survey.agents.critic_agent import CriticAgent
 from app.dev_survey.events import get_event_publisher
 from harness.storage.local_storage import LocalObjectStorage
-from harness.observability.trace_service import get_trace_service
+from harness.observability.trace_service import get_trace_service, TraceService
 from harness.config import get_harness_settings
-from langgraph.store.memory import InMemoryStore
 from harness.logger import logger
 
 settings = get_harness_settings()
@@ -146,17 +146,15 @@ def _get_dev_survey_object_storage():
     return LocalObjectStorage(url_prefix="/dev-research/reports")
 
 @lru_cache()
-def _get_dev_survey_trace_service():
-    return get_trace_service()
+def _get_dev_survey_trace_service() -> TraceService:
+    repository = TraceRepositoryImpl()
+    return get_trace_service(repository=repository)
 
-@lru_cache()
-def _get_dev_survey_store():
-    try:
-        from langgraph.store.postgres import AsyncPostgresStore
-        return AsyncPostgresStore.from_conn_string(conn_string=settings.DATABASE_URL)
-    except Exception as e:
-        logger.warning(f"[ServiceFactory] AsyncPostgresStore unavailable: {e}")
-        return InMemoryStore()
+
+def create_trace_service() -> TraceService:
+    """创建 TraceService（app 层工厂，负责注入 TraceRepositoryImpl）"""
+    repository = TraceRepositoryImpl()
+    return get_trace_service(repository=repository)
 
 
 def create_dev_survey_service(db: Session, report_url_prefix: str):
@@ -179,7 +177,6 @@ def create_dev_survey_service(db: Session, report_url_prefix: str):
         event_publisher_factory=_get_dev_survey_event_publisher,
         object_storage_factory=_get_dev_survey_object_storage,
         trace_service_factory=_get_dev_survey_trace_service,
-        store_factory=_get_dev_survey_store,
     )
 
 

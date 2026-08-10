@@ -1,9 +1,14 @@
 import uuid
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
 from uuid import UUID
+import hashlib
 from fastapi import HTTPException
+from sqlalchemy import text
+
+from app.infrastructure.db.session import SessionLocal
 
 from app.dev_survey.models.dtos import (
     CreateResearchRequest,
@@ -32,20 +37,8 @@ from harness.logger import logger
 from harness.observability.trace_service import get_trace_service, TraceService
 from app.common.utils.time_utils import get_current_utc_time
 from harness.workflow.saver import CheckpointConnectionError
-from langgraph.store.memory import InMemoryStore
 
 settings = get_harness_settings()
-
-
-def _default_store():
-    try:
-        from langgraph.store.postgres import AsyncPostgresStore
-        store = AsyncPostgresStore.from_conn_string(conn_string=settings.DATABASE_URL)
-        logger.info("Using AsyncPostgresStore for workflow intermediate data")
-        return store
-    except Exception as e:
-        logger.warning(f"AsyncPostgresStore unavailable, falling back to InMemoryStore: {e}")
-        return InMemoryStore()
 
 
 class ResearchService:
@@ -76,7 +69,6 @@ class ResearchService:
         event_publisher_factory: callable = None,
         object_storage_factory: callable = None,
         trace_service_factory: callable = None,
-        store_factory: callable = None,
     ):
         self.workflow_repository = workflow_repository
         self.task_repository = task_repository
@@ -91,8 +83,12 @@ class ResearchService:
         self._critic_agent_factory = critic_agent_factory or (lambda: CriticAgent(get_llm_client()))
         self._event_publisher_factory = event_publisher_factory or (lambda: get_event_publisher())
         self._object_storage_factory = object_storage_factory or (lambda: LocalObjectStorage(url_prefix=report_url_prefix))
-        self._trace_service_factory = trace_service_factory or (lambda: get_trace_service())
-        self._store_factory = store_factory or (lambda: _default_store())
+        def _default_trace_service_factory():
+            # 延迟导入避免循环依赖；app 层负责注入 TraceRepositoryImpl
+            from app.service_factory import create_trace_service
+            return create_trace_service()
+
+        self._trace_service_factory = trace_service_factory or _default_trace_service_factory
 
         self._plan_agent = None
         self._search_agent = None
@@ -102,7 +98,6 @@ class ResearchService:
         self._event_publisher = None
         self._object_storage = None
         self._trace_service = None
-        self._store = None
         self._research_plan_service = None
         self._task_execution_service = None
         self._report_generation_service = None
@@ -215,18 +210,25 @@ class ResearchService:
             self._trace_service = instance
         return self._trace_service
 
-    @property
-    def store(self):
-        if self._store is None:
-            try:
-                instance = self._store_factory()
-            except Exception as e:
-                logger.error(f"[ResearchService] Failed to create Store: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize Store via factory. Underlying error: {e}") from e
-            if instance is None:
-                raise RuntimeError("Store factory returned None. This indicates a programming error.")
-            self._store = instance
-        return self._store
+    async def workflow_graph(self, checkpointer=None):
+        """懒加载获取工作流图；执行时必须传入 checkpointer 以保证 Checkpoint 持久化。"""
+        if self._workflow_graph is None:
+            from app.dev_survey.workflow import ResearchWorkflowGraphParallel
+            self._workflow_graph = ResearchWorkflowGraphParallel(
+                research_plan_service=self.research_plan_service,
+                task_execution_service=self.task_execution_service,
+                report_generation_service=self.report_generation_service,
+                event_publisher=self.event_publisher,
+                task_repository=self.task_repository,
+                object_storage=self.object_storage,
+                evaluation_service=self.evaluation_service,
+                evaluation_orchestrator=self.evaluation_orchestrator,
+                trace_service=self.trace_service,
+                critic_agent=self.critic_agent,
+                reflection_enabled=settings.ENABLE_REFLECTION,
+                checkpointer=checkpointer,
+            )
+        return self._workflow_graph
 
     @property
     def research_plan_service(self) -> ResearchPlanService:
@@ -247,26 +249,6 @@ class ResearchService:
         return self._report_generation_service
 
     @property
-    def workflow_graph(self):
-        if self._workflow_graph is None:
-            from app.dev_survey.workflow import ResearchWorkflowGraphParallel
-            self._workflow_graph = ResearchWorkflowGraphParallel(
-                research_plan_service=self.research_plan_service,
-                task_execution_service=self.task_execution_service,
-                report_generation_service=self.report_generation_service,
-                event_publisher=self.event_publisher,
-                task_repository=self.task_repository,
-                object_storage=self.object_storage,
-                evaluation_service=self.evaluation_service,
-                evaluation_orchestrator=self.evaluation_orchestrator,
-                trace_service=self.trace_service,
-                critic_agent=self.critic_agent,
-                reflection_enabled=settings.ENABLE_REFLECTION,
-                store=self.store,
-            )
-        return self._workflow_graph
-
-    @property
     def saver_manager(self):
         if self._saver_manager is None:
             from harness.workflow import get_saver_manager
@@ -283,7 +265,6 @@ class ResearchService:
         self._event_publisher = None
         self._object_storage = None
         self._trace_service = None
-        self._store = None
         self._research_plan_service = None
         self._task_execution_service = None
         self._report_generation_service = None
@@ -333,102 +314,179 @@ class ResearchService:
 
         logger.info(f"[ResearchService] Executing research workflow: {workflow_id_str}")
 
-        workflow = await self.workflow_repository.find_by_id(workflow_id_str)
-        if not workflow:
-            raise ValueError(f"Workflow not found: {workflow_id_str}")
+        # ─── 分布式锁：防止同一 workflow 并发执行 ───
+        # 使用 PostgreSQL advisory lock；同步 SessionLocal，用 asyncio.to_thread 避免阻塞事件循环
+        acquired, lock_session = await self._acquire_workflow_lock(workflow_id_str)
 
-        workflow.start()
-        try:
-            await self.workflow_repository.update(workflow)
-        except Exception as db_error:
-            logger.error(f"[ResearchService] Failed to update workflow to database: {db_error}, but continuing with execution")
-
-        from app.dev_survey.workflow import WorkflowState
-        initial_state: WorkflowState = {
-            "workflow_id": workflow_id_str,
-            "topic": workflow.topic,
-            "scenario_id": workflow.scenario_id,
-            "tasks": [],
-            "report_content": None,
-            "report_url": None,
-            "error": None,
-            "created_at": workflow.created_at,
-            "updated_at": get_current_utc_time(),
-        }
-
-        config = {
-            "configurable": {
-                "thread_id": workflow_id_str
-            }
-        }
-
-        try:
-            checkpointer = await self.saver_manager.get_saver(thread_id=workflow_id_str)
-
-            await self.workflow_graph.graph.ainvoke(
-                initial_state,
-                config=config,
-                checkpointer=checkpointer
-            )
-
-            final_state = await self._get_final_state(config, workflow, workflow_id_str)
-            logger.info(f"[ResearchService] Final state: {final_state}")
-
-            await self._update_workflow_state(workflow, final_state, workflow_id_str)
-            await self._force_update_workflow_to_database(workflow)
-
-            workflow_status = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
-
-            item = await self.workflow_graph._load_from_store(workflow_id_str, "execute_duration_ms")
-            execute_duration_ms = item if item else None
-
-            await self.trace_service.complete_workflow_trace(
-                workflow_id=workflow_id_str,
-                status=workflow_status,
-                report_url=workflow.report_url,
-                execute_duration_ms=execute_duration_ms,
-            )
-
-            await self.workflow_graph.cleanup_store(workflow_id_str)
-
-            logger.info(f"[ResearchService] Workflow execution completed: {workflow_id}")
-        except CheckpointConnectionError as e:
-            logger.error(
-                f"[ResearchService] Checkpoint connection failed | "
-                f"workflow_id={workflow_id_str} | "
-                f"error={e.message} | "
-                f"retries={e.retry_count}",
-                exc_info=True
-            )
-            workflow.mark_all_failed()
-            try:
-                await self.workflow_repository.update(workflow)
-            except Exception as db_error:
-                logger.error(f"[ResearchService] Failed to update workflow in database after checkpoint error: {db_error}")
-            await self.event_publisher.publish_error_event(
-                workflow_id=workflow_id,
-                message="工作流状态存储不可用，请稍后重试"
+        if not acquired:
+            logger.warning(
+                f"[ResearchService] Workflow {workflow_id_str} is already executing, "
+                f"rejecting duplicate request"
             )
             raise HTTPException(
-                status_code=503,
+                status_code=409,
                 detail={
-                    "error": "CHECKPOINT_CONNECTION_ERROR",
-                    "message": "无法访问工作流状态存储，请稍后重试",
+                    "error": "WORKFLOW_ALREADY_EXECUTING",
+                    "message": "该工作流正在执行中，请勿重复提交",
                     "workflow_id": workflow_id_str
                 }
-            ) from e
-        except Exception as e:
-            logger.error(f"[ResearchService] Workflow execution failed: {str(e)}")
-            workflow.mark_all_failed()
+            )
+
+        try:
+            workflow = await self.workflow_repository.find_by_id(workflow_id_str)
+            if not workflow:
+                raise ValueError(f"Workflow not found: {workflow_id_str}")
+
+            workflow.start()
             try:
                 await self.workflow_repository.update(workflow)
             except Exception as db_error:
-                logger.error(f"[ResearchService] Failed to update workflow in database after failure: {db_error}")
-            await self.event_publisher.publish_error_event(
-                workflow_id=workflow_id,
-                message=str(e)
+                logger.error(f"[ResearchService] Failed to update workflow to database: {db_error}, but continuing with execution")
+
+            from app.dev_survey.workflow import WorkflowState
+            initial_state: WorkflowState = {
+                "workflow_id": workflow_id_str,
+                "topic": workflow.topic,
+                "scenario_id": workflow.scenario_id,
+                "tasks": [],
+                "report_content": None,
+                "report_url": None,
+                "error": None,
+                "created_at": workflow.created_at,
+                "updated_at": get_current_utc_time(),
+            }
+
+            config = {
+                "configurable": {
+                    "thread_id": workflow_id_str
+                }
+            }
+
+            try:
+                checkpointer = await self.saver_manager.get_saver(thread_id=workflow_id_str)
+                graph = await self.workflow_graph(checkpointer=checkpointer)
+
+                await graph.graph.ainvoke(
+                    initial_state,
+                    config=config
+                )
+
+                final_state = await self._get_final_state(config, workflow, workflow_id_str)
+                # 仅打印关键字段，避免日志输出完整 task_results（summary/sources_summary 等大段内容）
+                _log_keys = {k: v for k, v in (final_state or {}).items()
+                             if k in ("workflow_status", "task_summary", "report_url", "error")}
+                logger.info(f"[ResearchService] Final state summary: {_log_keys}")
+
+                await self._update_workflow_state(workflow, final_state, workflow_id_str)
+                await self._force_update_workflow_to_database(workflow)
+
+                workflow_status = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
+
+                try:
+                    await self.trace_service.complete_workflow_trace(
+                        workflow_id=workflow_id_str,
+                        status=workflow_status,
+                        report_url=workflow.report_url,
+                        execute_duration_ms=None,
+                    )
+                except Exception as trace_error:
+                    logger.warning(
+                        f"[ResearchService] Failed to complete workflow trace "
+                        f"(non-critical): {trace_error}"
+                    )
+
+                logger.info(f"[ResearchService] Workflow execution completed: {workflow_id}")
+            except CheckpointConnectionError as e:
+                logger.error(
+                    f"[ResearchService] Checkpoint connection failed | "
+                    f"workflow_id={workflow_id_str} | "
+                    f"error={e.message} | "
+                    f"retries={e.retry_count}",
+                    exc_info=True
+                )
+                workflow.mark_all_failed()
+                try:
+                    await self.workflow_repository.update(workflow)
+                except Exception as db_error:
+                    logger.error(f"[ResearchService] Failed to update workflow in database after checkpoint error: {db_error}")
+                await self.event_publisher.publish_error_event(
+                    workflow_id=workflow_id,
+                    message="工作流状态存储不可用，请稍后重试"
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "CHECKPOINT_CONNECTION_ERROR",
+                        "message": "无法访问工作流状态存储，请稍后重试",
+                        "workflow_id": workflow_id_str
+                    }
+                ) from e
+            except Exception as e:
+                logger.error(f"[ResearchService] Workflow execution failed: {str(e)}")
+                workflow.mark_all_failed()
+                try:
+                    await self.workflow_repository.update(workflow)
+                except Exception as db_error:
+                    logger.error(f"[ResearchService] Failed to update workflow in database after failure: {db_error}")
+                await self.event_publisher.publish_error_event(
+                    workflow_id=workflow_id,
+                    message=str(e)
+                )
+                raise
+        finally:
+            # 释放分布式锁
+            await self._release_workflow_lock(workflow_id_str, lock_session)
+
+    async def _acquire_workflow_lock(self, workflow_id: str) -> tuple[bool, Optional[Any]]:
+        """获取 PostgreSQL advisory lock。
+
+        返回 (acquired, session)。
+        - acquired=True: 可以执行，session 非 None 表示持有锁
+        - acquired=False: 锁已被其他进程持有
+        - 锁服务不可用时降级为无锁模式（acquired=True, session=None）
+        """
+        lock_id = self._workflow_lock_id(workflow_id)
+        session = None
+        try:
+            session = SessionLocal()
+            result = await asyncio.to_thread(
+                session.execute,
+                text("SELECT pg_try_advisory_lock(:lock_id)"),
+                {"lock_id": lock_id}
             )
-            raise
+            acquired = bool(result.scalar())
+            if not acquired:
+                await asyncio.to_thread(session.close)
+                return False, None
+            return True, session
+        except Exception as e:
+            logger.error(f"[ResearchService] Failed to acquire advisory lock: {e}")
+            if session:
+                try:
+                    await asyncio.to_thread(session.close)
+                except Exception:
+                    pass
+            # 降级为无锁模式
+            return True, None
+
+    async def _release_workflow_lock(self, workflow_id: str, session: Optional[Any]) -> None:
+        """释放 PostgreSQL advisory lock 并关闭 session"""
+        if not session:
+            return
+        lock_id = self._workflow_lock_id(workflow_id)
+        try:
+            await asyncio.to_thread(
+                session.execute,
+                text("SELECT pg_advisory_unlock(:lock_id)"),
+                {"lock_id": lock_id}
+            )
+        except Exception as e:
+            logger.warning(f"[ResearchService] Failed to release advisory lock: {e}")
+        finally:
+            try:
+                await asyncio.to_thread(session.close)
+            except Exception:
+                pass
 
     async def _get_final_state(self, config, workflow, workflow_id_str) -> Optional[Dict[str, Any]]:
         max_retries = 2
@@ -650,9 +708,11 @@ class ResearchService:
             logger.error(f"[ResearchService] Failed to update workflow from database: {e}")
 
     def _to_workflow_response(self, workflow: Workflow) -> WorkflowResponse:
+        # 过滤掉 reflection 补充任务（order >= 100），避免前端展示内部任务
         task_responses = [
             self._to_task_response(task)
             for task in workflow.tasks
+            if (task.order or 0) < 100
         ]
 
         # 确保状态字段转换为字符串
@@ -676,6 +736,7 @@ class ResearchService:
         # 确保状态字段转换为字符串
         status_value = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
 
+        # 过滤掉 reflection 补充任务（order >= 100），避免前端展示内部任务
         return ResearchResponse(
             workflow_id=workflow.workflow_id,
             topic=workflow.topic,
@@ -687,7 +748,7 @@ class ResearchService:
             updated_at=workflow.updated_at,
             started_at=workflow.started_at,
             completed_at=workflow.completed_at,
-            tasks=[self._to_task_response(task) for task in workflow.tasks]
+            tasks=[self._to_task_response(task) for task in workflow.tasks if (task.order or 0) < 100]
         )
 
     def _to_task_response(self, task) -> TaskResponse:
@@ -743,3 +804,9 @@ class ResearchService:
         except Exception as e:
             logger.error(f"[ResearchService] Failed to read report content: {e}")
             return None
+
+    @staticmethod
+    def _workflow_lock_id(workflow_id: str) -> int:
+        """将 workflow_id 映射为 PostgreSQL advisory lock 的 int64 key"""
+        h = hashlib.sha256(workflow_id.encode()).digest()
+        return int.from_bytes(h[:8], 'big') & 0x7FFFFFFFFFFFFFFF

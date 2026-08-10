@@ -44,6 +44,7 @@ class LangChainClient(LLMClient):
         
         self._client = None
         self._closed = False
+        self._client_lock = asyncio.Lock()
         self._client_params = {
             'model': self.model,
             'api_key': self.api_key,
@@ -54,30 +55,52 @@ class LangChainClient(LLMClient):
         
         logger.debug(f"LangChainClient initialized with model: {self.model}")
     
-    def _get_client(self, **override_params) -> ChatOpenAI:
+    async def _get_client(self, **override_params) -> ChatOpenAI:
         if self._closed:
             raise RuntimeError("[LangChainClient] Client has been closed")
         current_params = {**self._client_params, **override_params}
         
-        if (self._client is None or 
-            current_params.get('model') != self._client_params.get('model') or
-            current_params.get('temperature') != self._client_params.get('temperature')):
+        async with self._client_lock:
+            if (self._client is None or 
+                current_params.get('model') != self._client_params.get('model') or
+                current_params.get('temperature') != self._client_params.get('temperature')):
+                
+                old_client = self._client
+                self._client = ChatOpenAI(
+                    model=current_params['model'],
+                    api_key=current_params['api_key'],
+                    base_url=current_params['base_url'],
+                    temperature=current_params['temperature'],
+                    timeout=current_params['timeout']
+                )
+                logger.debug(f"[LangChainClient] Created new client instance with model: {current_params['model']}")
+                
+                if old_client is not None:
+                    await self._close_chatopenai(old_client)
             
-            self._client = ChatOpenAI(
-                model=current_params['model'],
-                api_key=current_params['api_key'],
-                base_url=current_params['base_url'],
-                temperature=current_params['temperature'],
-                timeout=current_params['timeout']
-            )
-            logger.debug(f"[LangChainClient] Created new client instance with model: {current_params['model']}")
-        
-        return self._client
+            return self._client
+    
+    @staticmethod
+    async def _close_chatopenai(client: ChatOpenAI) -> None:
+        """关闭 ChatOpenAI 底层的 httpx.AsyncClient 连接池。"""
+        try:
+            async_client = getattr(client, 'async_client', None)
+            if async_client is not None:
+                if hasattr(async_client, 'aclose'):
+                    await async_client.aclose()
+                elif hasattr(async_client, 'close'):
+                    result = async_client.close()
+                    if asyncio.iscoroutine(result):
+                        await result
+        except Exception as e:
+            logger.warning(f"[LangChainClient] Error closing underlying client: {e}")
 
     async def close(self):
         if self._closed:
             return
         self._closed = True
+        if self._client is not None:
+            await self._close_chatopenai(self._client)
         self._client = None
         logger.debug("[LangChainClient] Closed, underlying resources released")
 
@@ -135,7 +158,7 @@ class LangChainClient(LLMClient):
         
         for attempt in range(max_attempts):
             try:
-                client = self._get_client(model=model, temperature=temperature, timeout=timeout)
+                client = await self._get_client(model=model, temperature=temperature, timeout=timeout)
                 
                 config = RunnableConfig(
                     metadata={
@@ -222,7 +245,7 @@ class LangChainClient(LLMClient):
         max_attempts = self.max_retries
         for attempt in range(max_attempts):
             try:
-                client = self._get_client(model=model, temperature=temperature, timeout=timeout)
+                client = await self._get_client(model=model, temperature=temperature, timeout=timeout)
                 
                 chunk_count = 0
                 async for chunk in client.astream(langchain_messages):

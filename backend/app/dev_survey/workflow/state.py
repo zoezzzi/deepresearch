@@ -13,12 +13,17 @@ class WorkflowState(TypedDict, total=False):
 
     用于在 LangGraph 工作流节点之间传递状态
 
-    精简原则：仅保留路由必需字段，大字段迁移至 Store
+    设计原则：Checkpoint 是唯一提交点，所有节点间数据通过 state 传递。
+    task_results 和 quality_report 从 Store 迁移至 Checkpoint：
+    - task_results：执行节点产出的原始结果（含 summary, sources_summary）
+    - quality_report：报告生成节点产出的质量评估，供 reflect 节点消费
     """
     workflow_id: str
     topic: str
     scenario_id: Optional[str]
     tasks: List[Dict[str, Any]]
+    task_results: List[Dict[str, Any]]           # 原始执行结果（原 Store）
+    quality_report: Optional[Dict[str, Any]]     # 质量评估报告（原 Store）
     report_content: Optional[str]
     report_url: Optional[str]
     error: Optional[str]

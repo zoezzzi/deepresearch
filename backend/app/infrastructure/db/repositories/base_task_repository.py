@@ -68,6 +68,27 @@ class BaseTaskRepository(ABC):
             self.db_session.rollback()
             raise
 
+    async def find_by_ids(self, task_ids: List[str]) -> List[Any]:
+        """批量查询 task，一次查询替代 N 次 find_by_id"""
+        if not task_ids:
+            return []
+        logger.info(f"Finding tasks by ids: {len(task_ids)} tasks")
+
+        @with_db_retry(max_attempts=3)
+        def _find():
+            models = self.db_session.query(TaskModel).filter(
+                TaskModel.task_id.in_(task_ids)
+            ).all()
+            return [self._to_domain_entity(model) for model in models]
+
+        try:
+            result = _find()
+            self.db_session.commit()
+            return result
+        except Exception:
+            self.db_session.rollback()
+            raise
+
     async def find_by_workflow_id(self, workflow_id: str) -> List[Any]:
         logger.info(f"Finding tasks by workflow id: {workflow_id}")
 

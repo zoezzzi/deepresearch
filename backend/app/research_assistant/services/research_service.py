@@ -63,21 +63,27 @@ class ResearchService:
         self.event_publisher = get_event_publisher()
         self.object_storage = LocalObjectStorage(url_prefix=report_url_prefix)
         
-        from app.research_assistant.workflow import ResearchWorkflowGraph, WorkflowState
         from harness.workflow import get_saver_manager
-        self.workflow_graph = ResearchWorkflowGraph(
-            research_plan_service=self.research_plan_service,
-            task_execution_service=self.task_execution_service,
-            report_generation_service=self.report_generation_service,
-            event_publisher=self.event_publisher,
-            task_repository=task_repository,
-            object_storage=self.object_storage,
-            evaluation_service=self.evaluation_service,
-            evaluation_orchestrator=self.evaluation_orchestrator
-        )
-        
         self.saver_manager = get_saver_manager()
+        self._workflow_graph = None
         logger.info("Using AsyncPostgresSaverManager for workflow state persistence")
+
+    def _get_workflow_graph(self, checkpointer=None):
+        """构造工作流图，执行时传入 checkpointer 以保证 Checkpoint 持久化。"""
+        if self._workflow_graph is None:
+            from app.research_assistant.workflow import ResearchWorkflowGraph
+            self._workflow_graph = ResearchWorkflowGraph(
+                research_plan_service=self.research_plan_service,
+                task_execution_service=self.task_execution_service,
+                report_generation_service=self.report_generation_service,
+                event_publisher=self.event_publisher,
+                task_repository=self.task_repository,
+                object_storage=self.object_storage,
+                evaluation_service=self.evaluation_service,
+                evaluation_orchestrator=self.evaluation_orchestrator,
+                checkpointer=checkpointer
+            )
+        return self._workflow_graph
 
     async def cleanup(self):
         await remove_llm_client()
@@ -141,15 +147,18 @@ class ResearchService:
 
         try:
             checkpointer = await self.saver_manager.get_saver(thread_id=workflow_id_str)
+            graph = self._get_workflow_graph(checkpointer=checkpointer)
 
-            await self.workflow_graph.graph.ainvoke(
+            await graph.graph.ainvoke(
                 initial_state,
-                config=config,
-                checkpointer=checkpointer
+                config=config
             )
 
             final_state = await self._get_final_state(config, workflow, workflow_id_str)
-            logger.info(f"[ResearchService] Final state: {final_state}")
+            # 仅打印关键字段，避免日志输出完整 task_results
+            _log_keys = {k: v for k, v in (final_state or {}).items()
+                         if k in ("workflow_status", "task_summary", "report_url", "error")}
+            logger.info(f"[ResearchService] Final state summary: {_log_keys}")
 
             await self._update_workflow_state(workflow, final_state, workflow_id_str)
             await self._force_update_workflow_to_database(workflow)

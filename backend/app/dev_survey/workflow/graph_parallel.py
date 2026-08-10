@@ -1,9 +1,10 @@
 """
-开发者调研助手工作流图定义（优化版）
+开发者调研助手工作流图定义（优化版 v4.0）
 
-统一并行图结构，节点间数据传递使用 LangGraph Store
+统一并行图结构，节点间数据通过 Checkpoint (WorkflowState) 传递。
+移除 Store 依赖，消除多存储层不一致风险。
 
-v3.0: 数据模型拆分 + Store 集成 + 移除串行模式
+v4.0: 移除 Store + DB 批量写入重试 + 衍生数据按需重算
 """
 from typing import Dict, Any, List, Optional
 import asyncio
@@ -29,18 +30,17 @@ from harness.config import get_harness_settings
 from harness.observability.trace_service import TraceService
 from harness.observability.trace_context import get_trace_context
 from app.common.utils.time_utils import get_current_utc_time
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 settings = get_harness_settings()
-
-_STORE_INTERMEDIATE = "intermediate"
-_STORE_TTL = 3600
 
 
 class ResearchWorkflowGraphParallel:
     """
-    调研工作流图（优化版）
+    调研工作流图（优化版 v4.0）
 
-    统一并行图结构，节点间大对象通过 LangGraph Store 传递
+    统一并行图结构，节点间数据通过 Checkpoint (WorkflowState) 传递。
+    task_results 和 quality_report 从 Store 迁移至 WorkflowState。
     """
 
     def __init__(
@@ -57,7 +57,7 @@ class ResearchWorkflowGraphParallel:
         max_concurrent_tasks: int = 3,
         critic_agent=None,
         reflection_enabled: bool = False,
-        store=None,
+        checkpointer: BaseCheckpointSaver = None,
     ):
         self.research_plan_service = research_plan_service
         self.task_execution_service = task_execution_service
@@ -71,7 +71,7 @@ class ResearchWorkflowGraphParallel:
         self.max_concurrent_tasks = max_concurrent_tasks
         self.critic_agent = critic_agent
         self.reflection_enabled = reflection_enabled and critic_agent is not None
-        self._store = store
+        self.checkpointer = checkpointer
 
         self.parallel_executor = ParallelTaskExecutor(
             task_execution_service=task_execution_service,
@@ -108,7 +108,7 @@ class ResearchWorkflowGraphParallel:
         else:
             workflow.add_edge("generate_report", END)
 
-        return workflow.compile()
+        return workflow.compile(checkpointer=self.checkpointer)
 
     def _should_reflect(self, state: WorkflowState) -> str:
         if not self.reflection_enabled:
@@ -136,7 +136,7 @@ class ResearchWorkflowGraphParallel:
             if pending:
                 logger.info(f"[WorkflowParallel] Executing {len(pending)} supplementary tasks")
                 return "execute"
-        return "generate_report"
+        return "end"
 
     async def _reflect_node(self, state: WorkflowState) -> Dict[str, Any]:
         logger.info(f"[WorkflowParallel] Starting self-reflection for workflow {state['workflow_id']}")
@@ -154,7 +154,8 @@ class ResearchWorkflowGraphParallel:
             }
 
         try:
-            quality_report = await self._load_from_store(workflow_id, "quality_report")
+            # 从 Checkpoint 状态读取 quality_report（原从 Store 加载）
+            quality_report = state.get("quality_report")
             if quality_report is None:
                 quality_report = await self.critic_agent.execute(
                     topic=topic,
@@ -171,6 +172,7 @@ class ResearchWorkflowGraphParallel:
                 updated_tasks = await self._add_supplementary_tasks(state, supplementary_queries)
                 return {
                     "tasks": updated_tasks,
+                    "supplementary_queries": supplementary_queries,
                     "reflection_round": reflection_round,
                     "updated_at": get_current_utc_time()
                 }
@@ -260,13 +262,7 @@ class ResearchWorkflowGraphParallel:
                 "updated_at": get_current_utc_time()
             }
 
-        await self._save_to_store(workflow_id, "execute_duration_ms", execute_duration_ms)
-        await self._save_to_store(workflow_id, "task_results", result.get("task_results", []))
-
-        await self._save_to_store(workflow_id, "retrieved_chunks", result.get("retrieved_chunks", []))
-        await self._save_to_store(workflow_id, "retrieved_documents", result.get("retrieved_documents", []))
-        await self._save_to_store(workflow_id, "accumulated_knowledge", result.get("accumulated_knowledge", []))
-
+        # task_results 直接进入 Checkpoint（原写入 Store），衍生数据由 generate_report 节点按需重算
         logger.info(
             f"[WorkflowParallel] Execute phase completed: {execute_duration_ms}ms "
             f"({len(task_dicts)} tasks)"
@@ -274,6 +270,7 @@ class ResearchWorkflowGraphParallel:
 
         return {
             "tasks": result["tasks"],
+            "task_results": result["task_results"],
             "updated_at": get_current_utc_time()
         }
 
@@ -326,66 +323,81 @@ class ResearchWorkflowGraphParallel:
                     updated_tasks[i]["status"] = result["status"]
                     break
 
-        retrieved_chunks = []
-        retrieved_documents = []
-        accumulated_knowledge = []
-        for result in task_results:
-            if result.get("sources_summary"):
-                retrieved_chunks.append(result["sources_summary"])
-                retrieved_documents.append({
-                    "content": result["sources_summary"],
-                    "title": result["title"],
-                    "task_id": result["task_id"]
-                })
-            if result.get("status") == "completed" and result.get("summary"):
-                key_finding = result["summary"][:150].strip()
-                if key_finding:
-                    accumulated_knowledge.append(f"[{result['title']}] {key_finding}")
+        # DB 写入：同步重试 3 次，失败抛异常阻止 Checkpoint 写入
+        await self._update_tasks_batch_with_retry(workflow_id, task_results)
 
-        try:
-            await self._update_tasks_batch(workflow_id, task_results)
-        except Exception as db_error:
-            logger.error(f"[WorkflowParallel] Failed to update tasks in database: {db_error}")
-
+        # 衍生数据不再预计算，由 generate_report 节点按需重算
         logger.info(f"[WorkflowParallel] Task execution complete")
 
         return {
             "tasks": updated_tasks,
             "task_results": task_results,
-            "retrieved_chunks": retrieved_chunks,
-            "retrieved_documents": retrieved_documents,
-            "accumulated_knowledge": accumulated_knowledge,
             "updated_at": get_current_utc_time()
         }
 
-    async def _update_tasks_batch(self, workflow_id: str, task_results: List[Dict[str, Any]]):
-        try:
-            # 先从数据库加载所有需要更新的任务
-            tasks_to_update = []
-            for result in task_results:
-                task = await self.task_repository.find_by_id(result["task_id"])
-                if task:
-                    # 设置 started_at（使用任务执行时记录的时间）
+    async def _update_tasks_batch_with_retry(
+        self, workflow_id: str, task_results: List[Dict[str, Any]]
+    ) -> None:
+        """DB 批量更新，带重试。
+
+        3 次重试都失败则抛异常，阻止 Checkpoint 写入。
+        使用 find_by_ids 批量加载替代逐个 find_by_id。
+        """
+        task_ids = [r["task_id"] for r in task_results]
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                # ① 批量加载（1 次查询）
+                tasks = await self.task_repository.find_by_ids(task_ids)
+                task_map = {t.task_id: t for t in tasks}
+
+                tasks_to_update = []
+                for result in task_results:
+                    task = task_map.get(result["task_id"])
+                    if not task:
+                        continue
+                    # 设置 started_at
                     if result.get("started_at") and not task.started_at:
                         task.started_at = result["started_at"]
-                        task.status = "running"  # 确保状态正确
+                        task.status = "running"
                         task.updated_at = get_current_utc_time()
-                    
-                    # 处理完成/失败状态
+
                     if result["status"] == "completed":
-                        task.complete(result["summary"], result["sources_summary"], result["notices"])
+                        task.complete(
+                            result.get("summary", ""),
+                            result.get("sources_summary", ""),
+                            result.get("notices", ""),
+                        )
                     else:
                         task.fail(result.get("error", "Unknown error"))
-                    
+
                     tasks_to_update.append(task)
-            
-            # 批量更新所有任务（一个事务）
-            if tasks_to_update:
-                await self.task_repository.update_batch(tasks_to_update)
-                logger.info(f"[WorkflowParallel] Batch updated {len(tasks_to_update)} tasks in database")
-        except Exception as e:
-            logger.error(f"[WorkflowParallel] Batch update failed: {str(e)}")
-            raise
+
+                # ② 批量更新
+                if tasks_to_update:
+                    await self.task_repository.update_batch(tasks_to_update)
+                    logger.info(
+                        f"[WorkflowParallel] Batch updated {len(tasks_to_update)} tasks "
+                        f"(attempt {attempt + 1})"
+                    )
+                return  # 成功
+
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    wait = 0.5 * (attempt + 1)  # 0.5s, 1.0s
+                    logger.warning(
+                        f"[WorkflowParallel] DB write attempt {attempt + 1}/3 failed: {e}, "
+                        f"retrying in {wait}s..."
+                    )
+                    await asyncio.sleep(wait)
+
+        # 3 次都失败 → 抛异常，阻止 Checkpoint 保存
+        raise RuntimeError(
+            f"[WorkflowParallel] DB write failed after 3 retries "
+            f"for workflow {workflow_id}: {last_error}"
+        )
 
     async def _plan_node(self, state: WorkflowState) -> Dict[str, Any]:
         logger.info(f"[WorkflowParallel] Executing plan node for workflow {state['workflow_id']}")
@@ -474,15 +486,20 @@ class ResearchWorkflowGraphParallel:
                 "updated_at": get_current_utc_time()
             }
 
-        task_results = await self._load_from_store(workflow_id, "task_results")
-        retrieved_chunks = await self._load_from_store(workflow_id, "retrieved_chunks") or []
-        retrieved_documents = await self._load_from_store(workflow_id, "retrieved_documents") or []
-
-        if task_results is None:
-            logger.info(f"[WorkflowParallel] Store miss for task_results, falling back to DB")
+        # ─── ① task_results：从 Checkpoint 获取，降级到 DB ───
+        task_results = state.get("task_results", [])
+        if not task_results:
+            logger.info(f"[WorkflowParallel] Checkpoint miss for task_results, falling back to DB")
             task_results = await self._load_task_results_from_db(workflow_id)
-            # _load_task_results_from_db 内部已 commit，事务已关闭
-            # 后续 LLM 调用不会持有 DB 事务，防止 idle-in-transaction 超时
+
+        # ─── ② 衍生数据：按需重算 ───
+        retrieved_chunks = [
+            r["sources_summary"] for r in task_results if r.get("sources_summary")
+        ]
+        retrieved_documents = [
+            {"content": r["sources_summary"], "title": r["title"], "task_id": r["task_id"]}
+            for r in task_results if r.get("sources_summary")
+        ]
 
         sub_questions = state.get("sub_questions", [])
 
@@ -611,7 +628,7 @@ class ResearchWorkflowGraphParallel:
                     sub_questions=state.get("sub_questions", []),
                     tasks=state.get("tasks", [])
                 )
-                await self._save_to_store(workflow_id, "quality_report", quality_report)
+                # quality_report 写入 Checkpoint state（原写入 Store）
                 logger.info(
                     f"[WorkflowParallel] Critic evaluation: score={quality_report.get('overall_score')}, "
                     f"gaps={len(quality_report.get('gaps', []))}"
@@ -628,6 +645,8 @@ class ResearchWorkflowGraphParallel:
         }
         if report_error:
             result["error"] = report_error
+        if quality_report:
+            result["quality_report"] = quality_report
 
         return result
 
@@ -666,50 +685,6 @@ class ResearchWorkflowGraphParallel:
         except Exception as e:
             logger.error(f"[WorkflowParallel] Failed to load task results from DB: {e}")
             return []
-
-    async def _save_to_store(self, workflow_id: str, key: str, value: Any) -> None:
-        if self._store is None:
-            return
-        try:
-            await self._store.aput(
-                (workflow_id, _STORE_INTERMEDIATE),
-                key,
-                value,
-            )
-        except Exception as e:
-            logger.warning(f"[WorkflowParallel] Store save failed for {key}: {e}")
-
-    async def _load_from_store(self, workflow_id: str, key: str) -> Optional[Any]:
-        if self._store is None:
-            return None
-        try:
-            item = await self._store.aget(
-                (workflow_id, _STORE_INTERMEDIATE),
-                key
-            )
-            if item is None:
-                return None
-            # LangGraph Store 返回 Item 对象，value 通过属性访问
-            if hasattr(item, "value"):
-                return item.value
-            # 兼容 dict 格式（如果某些实现返回 dict）
-            if isinstance(item, dict):
-                return item.get("value")
-            return item
-        except Exception as e:
-            logger.warning(f"[WorkflowParallel] Store load failed for {key}: {e}")
-            return None
-
-    async def cleanup_store(self, workflow_id: str) -> None:
-        if self._store is None:
-            return
-        keys = ["task_results", "retrieved_chunks", "retrieved_documents",
-                "accumulated_knowledge", "quality_report", "execute_duration_ms"]
-        for key in keys:
-            try:
-                await self._store.adelete((workflow_id, _STORE_INTERMEDIATE), key)
-            except Exception:
-                pass
 
     @property
     def graph(self):

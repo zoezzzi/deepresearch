@@ -218,7 +218,14 @@ class TraceService:
 
 
 def get_trace_service(repository: Optional[TraceRepository] = None) -> TraceService:
+    """获取 TraceService 实例。
+
+    注意：harness 层不直接依赖 app 层。调用方（app/service_factory）
+    必须传入已经实例化的 TraceRepository，或者使用 app 层提供的工厂函数。
+    """
     if repository is None:
-        from app.infrastructure.db.repositories.trace_repository_impl import TraceRepositoryImpl
-        repository = TraceRepositoryImpl()
+        raise ValueError(
+            "TraceRepository must be provided. "
+            "Use app.service_factory.create_trace_service() or pass a repository instance."
+        )
     return TraceService(repository)

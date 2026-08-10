@@ -6,7 +6,7 @@
 import asyncio
 from typing import List, Dict, Any, Optional
 from harness.logger import logger
-from harness.observability.trace_service import TraceService, get_trace_service
+from harness.observability.trace_service import TraceService
 from harness.observability.trace_context import set_trace_context
 from app.dev_survey.services.task_execution_service import TaskExecutionService
 from app.dev_survey.models.models import Task
@@ -32,7 +32,7 @@ class ParallelTaskExecutor:
         self.event_publisher = event_publisher
         self.max_concurrent_tasks = max_concurrent_tasks
         self.semaphore = asyncio.Semaphore(max_concurrent_tasks)
-        self.trace_service = trace_service or get_trace_service()
+        self.trace_service = trace_service
         logger.info(f"[ParallelExecutor] Initialized with max_concurrent_tasks={max_concurrent_tasks}")
 
     async def execute_single_task(self, task: Task, trace_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -113,6 +113,8 @@ class ParallelTaskExecutor:
 
     async def _start_task_trace_safe(self, task: Task) -> Optional[str]:
         """安全地启动 task trace，失败时不阻断任务执行"""
+        if not self.trace_service:
+            return None
         try:
             span_id = await self.trace_service.start_task_trace(
                 workflow_id=task.workflow_id,
@@ -129,6 +131,8 @@ class ParallelTaskExecutor:
 
     async def _complete_task_trace_safe(self, span_id: str, summary: str, sources_summary: Optional[str]) -> None:
         """安全地完成 task trace，失败时仅记录日志"""
+        if not self.trace_service:
+            return
         try:
             await self.trace_service.complete_task_trace(
                 span_id=span_id,
@@ -140,6 +144,8 @@ class ParallelTaskExecutor:
 
     async def _fail_task_trace_safe(self, span_id: str, error_message: str) -> None:
         """安全地标记 task trace 失败，失败时仅记录日志"""
+        if not self.trace_service:
+            return
         try:
             await self.trace_service.fail_task_trace(
                 span_id=span_id,

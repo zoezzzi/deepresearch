@@ -188,7 +188,15 @@ class EvaluationResult(BaseModel):
             self.created_at = get_current_utc_time()
         if self.updated_at is None:
             self.updated_at = get_current_utc_time()
-    
+
+    def __getattr__(self, name: str) -> Any:
+        """向后兼容：允许通过属性访问 metrics 中的指标字段。"""
+        if name in {"metrics", "overall_score", "evaluation_details"}:
+            raise AttributeError(name)
+        if self.metrics and name in self.metrics:
+            return self.metrics[name]
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def start(self) -> None:
         self.status = EvaluationStatus.IN_PROGRESS
         self.started_at = get_current_utc_time()

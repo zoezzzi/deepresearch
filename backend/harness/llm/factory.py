@@ -1,4 +1,5 @@
 from typing import Dict, Type, Optional, Tuple
+import asyncio
 import threading
 import time
 from harness.llm.base import LLMClient
@@ -12,6 +13,15 @@ _TTL_SECONDS = 30 * 60
 
 _client_cache: Dict[str, Tuple[LLMClient, float]] = {}
 _cache_lock = threading.Lock()
+
+
+def _schedule_client_close(client: LLMClient) -> None:
+    """调度异步关闭旧客户端，释放底层 HTTP 连接池。"""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(client.close())
+    except RuntimeError:
+        logger.warning("[LLMClientCache] No running event loop, cannot close old client")
 
 
 class LLMFactory:
@@ -64,14 +74,23 @@ def get_llm_client(name: Optional[str] = None) -> LLMClient:
         if time.monotonic() - created_at < _TTL_SECONDS:
             return client
 
+    old_client = None
     with _cache_lock:
         entry = _client_cache.get(cache_key)
         if entry is not None:
             client, created_at = entry
             if time.monotonic() - created_at < _TTL_SECONDS:
                 return client
+        
+        old_entry = _client_cache.get(cache_key)
+        if old_entry is not None:
+            old_client = old_entry[0]
+        
         logger.debug(f"[LLMClientCache] Creating new LLM client: {cache_key}")
         _client_cache[cache_key] = (LLMFactory.create_client(name), time.monotonic())
+
+    if old_client is not None:
+        _schedule_client_close(old_client)
 
     return _client_cache[cache_key][0]
 

@@ -21,6 +21,7 @@ from harness.storage.base import ObjectStorage
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
 from app.common.utils.time_utils import get_current_utc_time
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 
 class ResearchWorkflowGraph:
@@ -42,7 +43,8 @@ class ResearchWorkflowGraph:
         task_repository: TaskRepository,
         object_storage: ObjectStorage,
         evaluation_service: EvaluationService,
-        evaluation_orchestrator: EvaluationOrchestrator
+        evaluation_orchestrator: EvaluationOrchestrator,
+        checkpointer: BaseCheckpointSaver = None
     ):
         self.research_plan_service = research_plan_service
         self.task_execution_service = task_execution_service
@@ -52,6 +54,7 @@ class ResearchWorkflowGraph:
         self.object_storage = object_storage
         self.evaluation_service = evaluation_service
         self.evaluation_orchestrator = evaluation_orchestrator
+        self.checkpointer = checkpointer
         self._graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
@@ -74,7 +77,7 @@ class ResearchWorkflowGraph:
         )
         workflow.add_edge("generate_report", END)
 
-        return workflow.compile()
+        return workflow.compile(checkpointer=self.checkpointer)
 
     async def _plan_node(self, state: WorkflowState) -> Dict[str, Any]:
         """计划节点：生成任务列表"""
