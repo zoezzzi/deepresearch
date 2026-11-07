@@ -96,9 +96,8 @@ npm run dev                   # http://localhost:3000
 
 同一批 28 份历史报告，用两种方法分别评分：**确定性规则评估**与 **RAGAS + LLM 判断**，两者结果一致。
 
-<img src="assets/benchmark/benchmark_quality.png" alt="benchmark_quality" style="zoom: 33%;" />
+<img src="assets/benchmark/benchmark_quality.png" alt="benchmark_quality" width="600" />
 
-整体达标率 **85.7%**（24/28），全指标门槛达标 19/28。
 
 ## 🏗️ 架构
 
