@@ -21,6 +21,7 @@ __pycache__/
 Thumbs.db
 
 # 日志
+logs
 backend/logs
 backend/coverage_report
 
