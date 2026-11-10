@@ -1,0 +1,25 @@
+[tool.ruff]
+line-length = 100
+indent-width = 4
+target-version = "py311"
+extend-exclude = ["migrations/versions", "logs", "reports"]
+
+[tool.ruff.lint]
+# E/W: PEP 8 风格; F: 逻辑错误; I: 导入排序; N: 命名规范; UP: 现代语法
+select = ["E", "W", "F", "I", "N", "UP"]
+ignore = [
+    "E501",  # 行长由 formatter 统一处理
+    "UP042"  # 是否改用 StrEnum 取决于业务语义，不强制
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "app", "harness"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

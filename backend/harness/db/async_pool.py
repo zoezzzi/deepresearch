@@ -1,18 +1,19 @@
-import os
 import asyncio
-from typing import Optional, AsyncGenerator, Dict, Any, Callable
+import os
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from functools import wraps
+from typing import Any
 
-os.environ['PGCLIENTENCODING'] = 'UTF8'
-os.environ['LANG'] = 'en_US.UTF-8'
+os.environ["PGCLIENTENCODING"] = "UTF8"
+os.environ["LANG"] = "en_US.UTF-8"
 
 from psycopg import AsyncConnection, OperationalError
-from psycopg_pool import AsyncConnectionPool
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
-from harness.logger import logger
 from harness.config import get_harness_settings
+from harness.logger import logger
 
 
 def with_retry(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
@@ -20,35 +21,38 @@ def with_retry(max_retries: int = 3, base_delay: float = 1.0, max_delay: float =
         @wraps(func)
         async def wrapper(*args, **kwargs):
             last_exception = None
-            
+
             for attempt in range(max_retries + 1):
                 try:
                     return await func(*args, **kwargs)
                 except OperationalError as e:
                     last_exception = e
                     if attempt < max_retries:
-                        delay = min(base_delay * (2 ** attempt), max_delay)
+                        delay = min(base_delay * (2**attempt), max_delay)
                         logger.warning(
                             f"[DatabasePool] Operation failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
                             f"Retrying in {delay:.1f}s..."
                         )
                         await asyncio.sleep(delay)
                     else:
-                        logger.error(f"[DatabasePool] Operation failed after {max_retries + 1} attempts: {e}")
+                        logger.error(
+                            f"[DatabasePool] Operation failed after {max_retries + 1} attempts: {e}"
+                        )
                         raise
-                except Exception as e:
+                except Exception:
                     raise
-            
+
             raise last_exception
-        
+
         return wrapper
+
     return decorator
 
 
 class DatabasePool:
     def __init__(self):
-        self._pool: Optional[AsyncConnectionPool] = None
-        self._config: Optional[Dict[str, Any]] = None
+        self._pool: AsyncConnectionPool | None = None
+        self._config: dict[str, Any] | None = None
         self._initialized = False
 
     def _build_conninfo(self) -> str:
@@ -61,19 +65,19 @@ class DatabasePool:
             f"password={settings.POSTGRES_PASSWORD}"
         )
 
-    def _get_pool_config(self) -> Dict[str, Any]:
+    def _get_pool_config(self) -> dict[str, Any]:
         settings = get_harness_settings()
         return {
-            "min_size": getattr(settings, 'DB_POOL_MIN_SIZE', 5),
-            "max_size": getattr(settings, 'DB_POOL_MAX_SIZE', 20),
-            "timeout": getattr(settings, 'DB_POOL_TIMEOUT', 30),
-            "max_idle": getattr(settings, 'DB_POOL_MAX_IDLE', 300),
-            "max_lifetime": getattr(settings, 'DB_POOL_MAX_LIFETIME', 3600),
+            "min_size": getattr(settings, "DB_POOL_MIN_SIZE", 5),
+            "max_size": getattr(settings, "DB_POOL_MAX_SIZE", 20),
+            "timeout": getattr(settings, "DB_POOL_TIMEOUT", 30),
+            "max_idle": getattr(settings, "DB_POOL_MAX_IDLE", 300),
+            "max_lifetime": getattr(settings, "DB_POOL_MAX_LIFETIME", 3600),
             "check": AsyncConnectionPool.check_connection,
             "kwargs": {
                 "row_factory": dict_row,
                 "autocommit": False,
-            }
+            },
         }
 
     async def initialize(self) -> None:
@@ -84,20 +88,19 @@ class DatabasePool:
         try:
             conninfo = self._build_conninfo()
             config = self._get_pool_config()
-            
-            logger.info(f"[DatabasePool] Initializing connection pool "
-                       f"(min_size={config['min_size']}, max_size={config['max_size']})")
 
-            self._pool = AsyncConnectionPool(
-                conninfo=conninfo,
-                **config
+            logger.info(
+                f"[DatabasePool] Initializing connection pool "
+                f"(min_size={config['min_size']}, max_size={config['max_size']})"
             )
-            
+
+            self._pool = AsyncConnectionPool(conninfo=conninfo, **config)
+
             await self._pool.wait()
             self._initialized = True
-            
+
             logger.info("[DatabasePool] Connection pool initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"[DatabasePool] Failed to initialize pool: {e}")
             self._pool = None
@@ -123,7 +126,7 @@ class DatabasePool:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT 1")
                 result = await cur.fetchone()
-                return result is not None and result.get('?column?') == 1
+                return result is not None and result.get("?column?") == 1
         except Exception as e:
             logger.warning(f"[DatabasePool] Connection validation failed: {e}")
             return False
@@ -137,7 +140,7 @@ class DatabasePool:
             try:
                 if not await self._validate_connection(conn):
                     raise OperationalError("Connection validation failed")
-                
+
                 yield conn
             except Exception as e:
                 logger.error(f"[DatabasePool] Error during connection usage: {e}")
@@ -145,45 +148,42 @@ class DatabasePool:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncGenerator[AsyncConnection, None]:
-        async with self.connection() as conn:
-            async with conn.transaction():
-                try:
-                    yield conn
-                except Exception as e:
-                    logger.error(f"[DatabasePool] Transaction error, rolling back: {e}")
-                    raise
+        async with self.connection() as conn, conn.transaction():
+            try:
+                yield conn
+            except Exception as e:
+                logger.error(f"[DatabasePool] Transaction error, rolling back: {e}")
+                raise
 
     @with_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
-    async def execute(self, query: str, params: Optional[tuple] = None) -> None:
-        async with self.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, params)
+    async def execute(self, query: str, params: tuple | None = None) -> None:
+        async with self.connection() as conn, conn.cursor() as cur:
+            await cur.execute(query, params)
 
     @with_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
-    async def fetchone(self, query: str, params: Optional[tuple] = None) -> Optional[Dict[str, Any]]:
-        async with self.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, params)
-                return await cur.fetchone()
+    async def fetchone(self, query: str, params: tuple | None = None) -> dict[str, Any] | None:
+        async with self.connection() as conn, conn.cursor() as cur:
+            await cur.execute(query, params)
+            return await cur.fetchone()
 
     @with_retry(max_retries=3, base_delay=1.0, max_delay=30.0)
-    async def fetchall(self, query: str, params: Optional[tuple] = None) -> list:
-        async with self.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, params)
-                return await cur.fetchall()
+    async def fetchall(self, query: str, params: tuple | None = None) -> list:
+        async with self.connection() as conn, conn.cursor() as cur:
+            await cur.execute(query, params)
+            return await cur.fetchall()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         if self._pool is None:
             return {"status": "not_initialized"}
 
+        stats = self._pool.get_stats()
         return {
             "status": "initialized" if self._initialized else "initializing",
-            "size": self._pool.size,
-            "max_size": self._pool.max_size,
-            "min_size": self._pool.min_size,
-            "available": self._pool.get_free_connections(),
-            "waiting": len(getattr(self._pool, '_waiting', [])),
+            "size": stats.get("pool_size", 0),
+            "max_size": stats.get("pool_max", 0),
+            "min_size": stats.get("pool_min", 0),
+            "available": stats.get("pool_available", 0),
+            "waiting": stats.get("requests_waiting", 0),
         }
 
     async def health_check(self) -> bool:
@@ -191,24 +191,23 @@ class DatabasePool:
             return False
 
         try:
-            async with self.connection() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT 1")
-                    result = await cur.fetchone()
-                    return result is not None and result.get('?column?') == 1
+            async with self.connection() as conn, conn.cursor() as cur:
+                await cur.execute("SELECT 1")
+                result = await cur.fetchone()
+                return result is not None and result.get("?column?") == 1
         except Exception as e:
             logger.warning(f"[DatabasePool] Health check failed: {e}")
             return False
 
 
-_pool_instance: Optional[DatabasePool] = None
+_pool_instance: DatabasePool | None = None
 
 
 async def init_connection_pool() -> DatabasePool:
     global _pool_instance
     if _pool_instance is None:
         _pool_instance = DatabasePool()
-    
+
     await _pool_instance.initialize()
     return _pool_instance
 
@@ -224,13 +223,12 @@ def get_connection_pool() -> DatabasePool:
     global _pool_instance
     if _pool_instance is None:
         raise RuntimeError(
-            "[DatabasePool] Pool not initialized. "
-            "Call init_connection_pool() first."
+            "[DatabasePool] Pool not initialized. Call init_connection_pool() first."
         )
     return _pool_instance
 
 
-async def get_pool_stats() -> Dict[str, Any]:
+async def get_pool_stats() -> dict[str, Any]:
     pool = get_connection_pool()
     return pool.get_stats()
 

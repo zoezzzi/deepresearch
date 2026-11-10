@@ -1,4 +1,3 @@
-from typing import List, Optional
 from app.dev_survey.services import EvaluationService
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
@@ -8,14 +7,14 @@ async def run_evaluation_task(
     evaluation_id: str,
     workflow_id: str,
     report: str,
-    contexts: List[str],
+    contexts: list[str],
     question: str,
-    sub_questions: Optional[List[str]] = None,
-    checklist_items: Optional[List[str]] = None,
-    retrieved_documents: Optional[List[dict]] = None,
-    citations: Optional[List[str]] = None,
+    sub_questions: list[str] | None = None,
+    checklist_items: list[str] | None = None,
+    retrieved_documents: list[dict] | None = None,
+    citations: list[str] | None = None,
     evaluation_service: EvaluationService = None,
-    evaluation_orchestrator: EvaluationOrchestrator = None
+    evaluation_orchestrator: EvaluationOrchestrator = None,
 ) -> None:
     logger.info(f"[EvaluationTask] Starting evaluation task: {evaluation_id}")
 
@@ -30,14 +29,14 @@ async def run_evaluation_task(
             sub_questions=sub_questions,
             checklist_items=checklist_items,
             retrieved_documents=retrieved_documents,
-            citations=citations
+            citations=citations,
         )
 
         await evaluation_service.complete_evaluation(
             evaluation_id=evaluation_id,
             scores=result["scores"],
             overall_score=result["overall_score"],
-            details=result.get("details")
+            details=result.get("details"),
         )
 
         logger.info(f"[EvaluationTask] Evaluation completed successfully: {evaluation_id}")

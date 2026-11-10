@@ -11,12 +11,7 @@ class WorkflowStatus(str, Enum):
 
     @classmethod
     def is_terminal_status(cls, status: "WorkflowStatus") -> bool:
-        terminal_statuses = [
-            cls.ALL_SUCCESS,
-            cls.PARTIAL_FAILED,
-            cls.ALL_FAILED,
-            cls.REPORT_FAILED
-        ]
+        terminal_statuses = [cls.ALL_SUCCESS, cls.PARTIAL_FAILED, cls.ALL_FAILED, cls.REPORT_FAILED]
         return status in terminal_statuses
 
     @classmethod

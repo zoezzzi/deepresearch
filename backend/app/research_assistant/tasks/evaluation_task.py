@@ -1,4 +1,3 @@
-from typing import List, Optional
 from app.research_assistant.services import EvaluationService
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
@@ -8,12 +7,12 @@ async def run_evaluation_task(
     evaluation_id: str,
     workflow_id: str,
     report: str,
-    contexts: List[str],
+    contexts: list[str],
     question: str,
-    sub_questions: List[str],
-    citations: List[str],
+    sub_questions: list[str],
+    citations: list[str],
     evaluation_service: EvaluationService,
-    evaluation_orchestrator: EvaluationOrchestrator
+    evaluation_orchestrator: EvaluationOrchestrator,
 ) -> None:
     logger.info(f"[EvaluationTask] Starting evaluation task: {evaluation_id}")
 
@@ -26,14 +25,14 @@ async def run_evaluation_task(
             contexts=contexts,
             question=question,
             sub_questions=sub_questions,
-            citations=citations
+            citations=citations,
         )
 
         await evaluation_service.complete_evaluation(
             evaluation_id=evaluation_id,
             scores=result["scores"],
             overall_score=result["overall_score"],
-            details=result.get("details")
+            details=result.get("details"),
         )
 
         logger.info(f"[EvaluationTask] Evaluation completed successfully: {evaluation_id}")

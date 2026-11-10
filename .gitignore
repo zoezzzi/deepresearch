@@ -39,6 +39,12 @@ backend/.coverage
 backend/pytest.ini
 requirements-test.txt
 
+# 代码风格检查与测试产物
+.ruff_cache/
+htmlcov/
+coverage/
+.coverage
+
 .gitignore
 
 

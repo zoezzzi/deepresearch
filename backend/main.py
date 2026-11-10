@@ -1,24 +1,37 @@
+"""FastAPI application entry point: wiring, startup lifecycle and health checks."""
+
 import asyncio
-import selectors
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
-from harness.config import get_harness_settings
-from harness.logger import logger
-from app.infrastructure.db.session import init_db
-from harness.db.async_pool import init_connection_pool, close_connection_pool, get_pool_stats, check_pool_health
-from app.research_assistant.workflow.saver import setup_checkpointer, get_saver_manager
-from api.controllers import research_router, trace_router
 
+from api.controllers import research_router, trace_router
+from api.errors import register_exception_handlers
 from app.config import get_app_settings
 from app.scenarios.manager import register_enabled_scenarios
+from harness.config import get_harness_settings
+from harness.db.async_pool import (
+    check_pool_health,
+    close_connection_pool,
+    get_pool_stats,
+    init_connection_pool,
+)
+from harness.db.session import init_db
+from harness.logger import logger
+from harness.workflow import get_saver_manager, setup_checkpointer
 
 # Windows 平台需要设置 SelectorEventLoop 以兼容 psycopg
-if sys.platform == 'win32':
+if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     logger.info("Windows 平台: 已设置 WindowsSelectorEventLoopPolicy")
+
+    def selector_loop_factory():
+        """uvicorn>=0.36 forces ProactorEventLoop on Windows, which psycopg does not support, so supply a Selector factory explicitly."""
+        return asyncio.SelectorEventLoop()
+
 
 settings = get_harness_settings()
 
@@ -27,25 +40,29 @@ settings = get_harness_settings()
 async def lifespan(app: FastAPI):
     """
     FastAPI 生命周期管理器
-    
+
     在应用启动时初始化连接池和 AsyncPostgresSaver，失败则阻止应用启动。
     在应用关闭时清理资源。
     """
     logger.info("=" * 60)
     logger.info("应用启动中...")
     logger.info("=" * 60)
-    
+
     # 注册场景（App 层负责）
     logger.info("初始化场景...")
     app_settings = get_app_settings()
     enabled_scenarios = app_settings.enabled_scenarios_list
-    
+
     if not enabled_scenarios:
         logger.warning("[Main] 没有配置启用的场景，应用功能将受限")
     else:
         logger.info(f"[Main] 准备注册场景: {enabled_scenarios}")
-        register_enabled_scenarios(enabled_scenarios)
-    
+        try:
+            register_enabled_scenarios(enabled_scenarios)
+        except Exception as e:
+            logger.exception(f"[Main] 场景注册失败: {e}")
+            raise RuntimeError(f"应用启动失败: 场景注册失败 - {e}") from e
+
     # 初始化同步数据库
     logger.info("初始化同步数据库...")
     try:
@@ -54,29 +71,33 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"同步数据库初始化失败: {e}")
         raise RuntimeError(f"同步数据库初始化失败: {e}") from e
-    
+
     # 准备报告存储目录
-    reports_path = Path(settings.REPORT_STORAGE_PATH)
-    reports_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"报告存储目录已准备: {reports_path}")
-    
+    try:
+        reports_path = Path(settings.REPORT_STORAGE_PATH)
+        reports_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"报告存储目录已准备: {reports_path}")
+    except Exception as e:
+        logger.exception(f"报告存储目录创建失败: {e}")
+        raise RuntimeError(f"应用启动失败: 无法创建报告存储目录 - {e}") from e
+
     # 初始化异步数据库连接池（关键组件，失败则阻止启动）
     logger.info("初始化异步数据库连接池...")
     try:
         pool = await init_connection_pool()
-        
+
         # 验证连接池健康状态
         is_healthy = await pool.health_check()
         if not is_healthy:
             raise RuntimeError("连接池健康检查失败")
-        
+
         logger.info("异步数据库连接池初始化完成且健康")
-        
+
     except Exception as e:
         logger.error(f"异步数据库连接池初始化失败: {e}")
         logger.error("连接池是核心组件，应用无法启动")
         raise RuntimeError(f"异步数据库连接池初始化失败: {e}") from e
-    
+
     # 强制初始化并验证 AsyncPostgresSaver（关键组件，失败则阻止启动）
     logger.info("初始化并验证 AsyncPostgresSaver...")
     try:
@@ -87,7 +108,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"AsyncPostgresSaver 初始化失败: {e}")
         logger.error("持久化存储是核心组件，应用无法启动")
         raise RuntimeError(f"应用启动失败: 无法初始化持久化存储 - {e}") from e
-    
+
     # 初始化 LangGraph checkpoint 表（关键组件，失败则阻止启动）
     logger.info("初始化 LangGraph checkpoint 表...")
     try:
@@ -97,48 +118,48 @@ async def lifespan(app: FastAPI):
         logger.error(f"LangGraph checkpoint 表初始化失败: {e}")
         logger.error("Checkpoint 表是核心组件，应用无法启动")
         raise RuntimeError(f"应用启动失败: 无法初始化 checkpoint 表 - {e}") from e
-    
+
     logger.info("=" * 60)
     logger.info("应用启动完成")
     logger.info("=" * 60)
-    
+
     yield  # 应用运行期间
-    
+
     # 应用关闭时的清理工作
     logger.info("=" * 60)
     logger.info("应用关闭中...")
     logger.info("=" * 60)
-    
+
     try:
         saver_manager = get_saver_manager()
         await saver_manager.close()
         logger.info("AsyncPostgresSaver 已关闭")
     except Exception as e:
         logger.error(f"关闭 AsyncPostgresSaver 时出错: {e}")
-    
+
     try:
         await close_connection_pool()
         logger.info("异步数据库连接池已关闭")
     except Exception as e:
         logger.error(f"关闭异步数据库连接池时出错: {e}")
-    
+
     try:
         from harness.llm.factory import clear_llm_client_cache
+
         await clear_llm_client_cache()
         logger.info("LLM 客户端缓存已清理")
     except Exception as e:
         logger.error(f"清理 LLM 客户端缓存时出错: {e}")
-    
+
     logger.info("=" * 60)
     logger.info("应用关闭完成")
     logger.info("=" * 60)
 
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    debug=settings.DEBUG,
-    lifespan=lifespan
-)
+app = FastAPI(title=settings.PROJECT_NAME, debug=settings.DEBUG, lifespan=lifespan)
+
+# 统一错误响应结构（校验错误 / HTTPException / 未捕获异常）
+register_exception_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -154,6 +175,7 @@ app.include_router(trace_router)
 
 @app.get("/")
 async def root():
+    """Simple liveness probe used by load balancers and local checks."""
     logger.info("Root endpoint called")
     return {"message": "Welcome to DeepResearch", "version": "1.0.0"}
 
@@ -162,7 +184,7 @@ async def root():
 async def health_check():
     """健康检查端点"""
     health_status = {"status": "healthy", "components": {}}
-    
+
     # 检查数据库连接池
     try:
         pool_healthy = await check_pool_health()
@@ -172,12 +194,9 @@ async def health_check():
         if not pool_healthy:
             health_status["status"] = "degraded"
     except Exception as e:
-        health_status["components"]["database_pool"] = {
-            "status": "unavailable",
-            "error": str(e)
-        }
+        health_status["components"]["database_pool"] = {"status": "unavailable", "error": str(e)}
         health_status["status"] = "degraded"
-    
+
     return health_status
 
 
@@ -186,17 +205,18 @@ async def db_pool_stats():
     """数据库连接池统计信息端点"""
     try:
         stats = await get_pool_stats()
-        return {
-            "status": "success",
-            "data": stats
-        }
+        return {"status": "success", "data": stats}
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=settings.DEBUG)
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.DEBUG,
+        loop="main:selector_loop_factory" if sys.platform == "win32" else "auto",
+    )

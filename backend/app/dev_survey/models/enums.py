@@ -15,7 +15,7 @@ class WorkflowStatus(str, Enum):
             cls.ALL_SUCCESS.value,
             cls.PARTIAL_FAILED.value,
             cls.ALL_FAILED.value,
-            cls.REPORT_FAILED.value
+            cls.REPORT_FAILED.value,
         ]
         return status in terminal_statuses
 

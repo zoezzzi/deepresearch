@@ -3,6 +3,7 @@
 
 在日志中注入 trace 上下文信息
 """
+
 from harness.observability.trace_context import trace_id_var
 
 

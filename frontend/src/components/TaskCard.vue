@@ -7,7 +7,7 @@
     <h3 class="task-title">{{ task.title }}</h3>
     <p class="task-intent">{{ task.intent }}</p>
     <p class="task-query">查询: {{ task.query }}</p>
-    
+
     <div v-if="task.summary" class="task-results">
       <div class="result-section">
         <h4>总结</h4>
@@ -96,7 +96,8 @@ const statusIcon = computed(() => {
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: 0 0 0 0 rgba(66, 153, 225, 0.4);
   }
   50% {

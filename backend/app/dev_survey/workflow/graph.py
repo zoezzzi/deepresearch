@@ -3,26 +3,29 @@
 
 定义 LangGraph 工作流的节点和边
 """
-from typing import Dict, Any, List
+
 import asyncio
-from langgraph.graph import StateGraph, END
-from app.dev_survey.workflow.state import WorkflowState
-from app.dev_survey.services import (
-    ResearchPlanService,
-    TaskExecutionService,
-    ReportGenerationService,
-    EvaluationService
-)
+from typing import Any
+
+from langgraph.graph import END, StateGraph
+
+from app.common.utils.time_utils import get_current_utc_time
+from app.dev_survey.events import EventPublisher
 from app.dev_survey.models.models import Task
 from app.dev_survey.repositories import TaskRepository
-from app.dev_survey.events import EventPublisher
+from app.dev_survey.services import (
+    EvaluationService,
+    ReportGenerationService,
+    ResearchPlanService,
+    TaskExecutionService,
+)
 from app.dev_survey.tasks import run_evaluation_task
-from harness.storage.base import ObjectStorage
+from app.dev_survey.workflow.state import WorkflowState
+from harness.config import get_harness_settings
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
-from harness.config import get_harness_settings
 from harness.observability.trace_service import TraceService
-from app.common.utils.time_utils import get_current_utc_time
+from harness.storage.base import ObjectStorage
 
 settings = get_harness_settings()
 
@@ -47,7 +50,7 @@ class ResearchWorkflowGraph:
         object_storage: ObjectStorage,
         evaluation_service: EvaluationService,
         evaluation_orchestrator: EvaluationOrchestrator,
-        trace_service: TraceService = None
+        trace_service: TraceService = None,
     ):
         self.research_plan_service = research_plan_service
         self.task_execution_service = task_execution_service
@@ -73,16 +76,13 @@ class ResearchWorkflowGraph:
         workflow.add_conditional_edges(
             "execute_task",
             self._should_continue,
-            {
-                "continue": "execute_task",
-                "generate_report": "generate_report"
-            }
+            {"continue": "execute_task", "generate_report": "generate_report"},
         )
         workflow.add_edge("generate_report", END)
 
         return workflow.compile()
 
-    async def _plan_node(self, state: WorkflowState) -> Dict[str, Any]:
+    async def _plan_node(self, state: WorkflowState) -> dict[str, Any]:
         """计划节点：生成任务列表"""
         logger.info(f"[Workflow] Executing plan node for workflow {state['workflow_id']}")
 
@@ -91,7 +91,7 @@ class ResearchWorkflowGraph:
             tasks = await self.research_plan_service.generate_tasks(
                 workflow_id=workflow_id,
                 topic=state["topic"],
-                description=state.get("description", "")
+                description=state.get("description", ""),
             )
 
             task_dicts = [
@@ -101,7 +101,7 @@ class ResearchWorkflowGraph:
                     "intent": task.intent,
                     "query": task.query,
                     "order": task.order,
-                    "status": "pending"
+                    "status": "pending",
                 }
                 for task in tasks
             ]
@@ -110,19 +110,23 @@ class ResearchWorkflowGraph:
                 await self.task_repository.save_batch(tasks)
                 logger.info(f"[Workflow] Saved {len(tasks)} tasks to database")
             except Exception as db_error:
-                logger.error(f"[Workflow] Failed to save tasks to database: {db_error}, but continuing workflow execution")
+                logger.error(
+                    f"[Workflow] Failed to save tasks to database: {db_error}, but continuing workflow execution"
+                )
 
             await self.event_publisher.publish_plan_event(
-                workflow_id=state["workflow_id"],
-                tasks=task_dicts
+                workflow_id=state["workflow_id"], tasks=task_dicts
             )
 
             sub_questions = [task.title for task in tasks]
             checklist_items = sub_questions
 
             logger.info(f"[Workflow] Plan generated with {len(task_dicts)} tasks")
-            initial_accumulated = [] if getattr(settings, "ENABLE_KNOWLEDGE_TRANSFER", False) else None
-            
+            initial_accumulated = (
+                [] if getattr(settings, "ENABLE_KNOWLEDGE_TRANSFER", False) else None
+            )
+            # None 表示未开启知识传递；空列表表示已开启但尚无前序发现，两者语义不同
+
             return {
                 "tasks": task_dicts,
                 "current_task_index": 0,
@@ -133,35 +137,34 @@ class ResearchWorkflowGraph:
                 "retrieved_documents": [],
                 "citations": [],
                 "accumulated_knowledge": initial_accumulated,
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
         except Exception as e:
             logger.error(f"[Workflow] Plan node failed: {str(e)}")
             await self.event_publisher.publish_error_event(
-                workflow_id=state["workflow_id"],
-                message=str(e)
+                workflow_id=state["workflow_id"], message=str(e)
             )
-            return {
-                "error": str(e),
-                "updated_at": get_current_utc_time()
-            }
+            return {"error": str(e), "updated_at": get_current_utc_time()}
 
-    async def _execute_task_node(self, state: WorkflowState) -> Dict[str, Any]:
+    async def _execute_task_node(self, state: WorkflowState) -> dict[str, Any]:
         """任务执行节点：执行单个任务"""
         current_index = state["current_task_index"]
         tasks = state["tasks"]
 
         if current_index >= len(tasks):
+            # 越界时直接原样返回：兼容 checkpoint 恢复后索引与任务列表不一致的情况
             return state
 
         current_task = tasks[current_index]
-        logger.info(f"[Workflow] Executing task {current_index + 1}/{len(tasks)}: {current_task['title']}")
+        logger.info(
+            f"[Workflow] Executing task {current_index + 1}/{len(tasks)}: {current_task['title']}"
+        )
 
         try:
             await self.event_publisher.publish_task_start_event(
                 workflow_id=state["workflow_id"],
                 task_id=current_task["task_id"],
-                task_title=current_task["title"]
+                task_title=current_task["title"],
             )
 
             task = Task(
@@ -170,11 +173,13 @@ class ResearchWorkflowGraph:
                 title=current_task["title"],
                 intent=current_task["intent"],
                 query=current_task["query"],
-                order=current_task["order"]
+                order=current_task["order"],
             )
 
             enable_knowledge_transfer = getattr(settings, "ENABLE_KNOWLEDGE_TRANSFER", False)
-            accumulated_knowledge = state.get("accumulated_knowledge", []) if enable_knowledge_transfer else None
+            accumulated_knowledge = (
+                state.get("accumulated_knowledge", []) if enable_knowledge_transfer else None
+            )
 
             summary, sources_summary, notices = await self.task_execution_service.execute_task(
                 task, accumulated_knowledge=accumulated_knowledge
@@ -185,7 +190,7 @@ class ResearchWorkflowGraph:
                 "title": current_task["title"],
                 "summary": summary,
                 "sources_summary": sources_summary,
-                "notices": notices
+                "notices": notices,
             }
 
             await self.event_publisher.publish_task_complete_event(
@@ -194,7 +199,7 @@ class ResearchWorkflowGraph:
                 task_title=current_task["title"],
                 summary=summary,
                 sources_summary=sources_summary,
-                notices=notices
+                notices=notices,
             )
 
             tasks[current_index]["status"] = "completed"
@@ -204,10 +209,17 @@ class ResearchWorkflowGraph:
                 if task_entity:
                     task_entity.complete(summary, sources_summary, notices)
                     await self.task_repository.update(task_entity)
-                    logger.info(f"[Workflow] Task {current_task['task_id']} status updated to completed in database")
+                    logger.info(
+                        f"[Workflow] Task {current_task['task_id']} status updated to completed in database"
+                    )
                 else:
-                    logger.warning(f"[Workflow] Task {current_task['task_id']} not found in database, skipping status update")
-            except Exception as db_error:logger.error(f"[Workflow] Failed to update task {current_task['task_id']} status in database: {db_error}")
+                    logger.warning(
+                        f"[Workflow] Task {current_task['task_id']} not found in database, skipping status update"
+                    )
+            except Exception as db_error:
+                logger.error(
+                    f"[Workflow] Failed to update task {current_task['task_id']} status in database: {db_error}"
+                )
 
             logger.info(f"[Workflow] Task {current_index + 1} completed")
 
@@ -216,30 +228,36 @@ class ResearchWorkflowGraph:
 
             if sources_summary:
                 retrieved_chunks.append(sources_summary)
-                retrieved_documents.append({
-                    "content": sources_summary,
-                    "title": current_task["title"],
-                    "task_id": current_task["task_id"]
-                })
+                retrieved_documents.append(
+                    {
+                        "content": sources_summary,
+                        "title": current_task["title"],
+                        "task_id": current_task["task_id"],
+                    }
+                )
 
             new_accumulated = None
             if enable_knowledge_transfer:
                 new_accumulated = state.get("accumulated_knowledge", [])
                 if summary:
+                    # 仅取摘要前 150 字符作为关键发现，避免后续 prompt 随任务数线性膨胀
                     key_finding = summary[:150].strip()
                     if key_finding:
-                        new_accumulated = new_accumulated + [f"[{current_task['title']}] {key_finding}"]
+                        new_accumulated = new_accumulated + [
+                            f"[{current_task['title']}] {key_finding}"
+                        ]
 
             citations = state.get("citations", [])
             if sources_summary:
-                for line in sources_summary.split('\n'):
+                # 从来源摘要的文本行中抽取 URL 并去重，作为评测引用覆盖率的输入
+                for line in sources_summary.split("\n"):
                     line = line.strip()
-                    if line.startswith('- ') or line.startswith('* '):
+                    if line.startswith("- ") or line.startswith("* "):
                         line = line[2:]
-                    for url_pattern in ['http://', 'https://']:
+                    for url_pattern in ["http://", "https://"]:
                         idx = line.find(url_pattern)
                         if idx != -1:
-                            url = line[idx:].split()[0].rstrip(')')
+                            url = line[idx:].split()[0].rstrip(")")
                             if url not in citations:
                                 citations = citations + [url]
                             break
@@ -252,13 +270,13 @@ class ResearchWorkflowGraph:
                 "retrieved_documents": retrieved_documents,
                 "accumulated_knowledge": new_accumulated,
                 "citations": citations,
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
         except Exception as e:
             logger.error(f"[Workflow] Task execution failed: {str(e)}")
             await self.event_publisher.publish_error_event(
                 workflow_id=state["workflow_id"],
-                message=f"Task {current_task['title']} failed: {str(e)}"
+                message=f"Task {current_task['title']} failed: {str(e)}",
             )
             tasks[current_index]["status"] = "failed"
 
@@ -267,16 +285,22 @@ class ResearchWorkflowGraph:
                 if task_entity:
                     task_entity.fail(str(e))
                     await self.task_repository.update(task_entity)
-                    logger.info(f"[Workflow] Task {current_task['task_id']} status updated to failed in database")
+                    logger.info(
+                        f"[Workflow] Task {current_task['task_id']} status updated to failed in database"
+                    )
                 else:
-                    logger.warning(f"[Workflow] Task {current_task['task_id']} not found in database, skipping status update")
+                    logger.warning(
+                        f"[Workflow] Task {current_task['task_id']} not found in database, skipping status update"
+                    )
             except Exception as db_error:
-                logger.error(f"[Workflow] Failed to update task {current_task['task_id']} failed status in database: {db_error}")
+                logger.error(
+                    f"[Workflow] Failed to update task {current_task['task_id']} failed status in database: {db_error}"
+                )
 
             return {
                 "tasks": tasks,
                 "current_task_index": current_index + 1,
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
 
     def _should_continue(self, state: WorkflowState) -> str:
@@ -291,7 +315,7 @@ class ResearchWorkflowGraph:
             return "generate_report"
         return "continue"
 
-    async def _generate_report_node(self, state: WorkflowState) -> Dict[str, Any]:
+    async def _generate_report_node(self, state: WorkflowState) -> dict[str, Any]:
         """报告生成节点：生成最终报告"""
         logger.info(f"[Workflow] Generating report for workflow {state['workflow_id']}")
 
@@ -300,13 +324,11 @@ class ResearchWorkflowGraph:
         completed_tasks = sum(1 for t in tasks if t.get("status") == "completed")
         failed_tasks = sum(1 for t in tasks if t.get("status") == "failed")
 
-        logger.info(f"[Workflow] Task summary: {completed_tasks}/{total_tasks} tasks completed, {failed_tasks} failed")
+        logger.info(
+            f"[Workflow] Task summary: {completed_tasks}/{total_tasks} tasks completed, {failed_tasks} failed"
+        )
 
-        task_summary = {
-            "total": total_tasks,
-            "completed": completed_tasks,
-            "failed": failed_tasks
-        }
+        task_summary = {"total": total_tasks, "completed": completed_tasks, "failed": failed_tasks}
 
         completion_rate = completed_tasks / total_tasks if total_tasks > 0 else 0
 
@@ -317,9 +339,11 @@ class ResearchWorkflowGraph:
             return {
                 "report_content": None,
                 "report_url": None,
-                "workflow_status": "all_failed" if failed_tasks == total_tasks else "partial_failed",
+                "workflow_status": "all_failed"
+                if failed_tasks == total_tasks
+                else "partial_failed",
                 "task_summary": task_summary,
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
 
         logger.info(
@@ -341,12 +365,13 @@ class ResearchWorkflowGraph:
         evaluation_id = None
 
         try:
-            logger.info(f"[Workflow] Starting report generation for workflow {state['workflow_id']}")
+            logger.info(
+                f"[Workflow] Starting report generation for workflow {state['workflow_id']}"
+            )
             workflow_id = state["workflow_id"]
 
             task_results_map = {
-                result["task_id"]: result
-                for result in state.get("task_results", [])
+                result["task_id"]: result for result in state.get("task_results", [])
             }
 
             task_entities = []
@@ -357,7 +382,7 @@ class ResearchWorkflowGraph:
                     title=task_dict["title"],
                     intent=task_dict["intent"],
                     query=task_dict["query"],
-                    order=task_dict["order"]
+                    order=task_dict["order"],
                 )
 
                 if task_dict["task_id"] in task_results_map:
@@ -369,24 +394,24 @@ class ResearchWorkflowGraph:
                 task_entities.append(task)
 
             report = await self.report_generation_service.generate_report(
-                workflow_id=workflow_id,
-                topic=state["topic"],
-                tasks=task_entities
+                workflow_id=workflow_id, topic=state["topic"], tasks=task_entities
             )
             report_content = report.content
             report_generated = True
 
-            logger.info(f"[Workflow] Report generated successfully: {len(report_content) if report_content else 0} characters")
+            logger.info(
+                f"[Workflow] Report generated successfully: {len(report_content) if report_content else 0} characters"
+            )
 
             try:
-                logger.info(f"[Workflow] Saving report to storage")
+                logger.info("[Workflow] Saving report to storage")
                 report_content_bytes = report.content.encode("utf-8")
                 report_filename = f"{state['workflow_id']}.md"
                 report_url = await self.object_storage.upload_object(
                     bucket_name="reports",
                     object_name=report_filename,
                     data=report_content_bytes,
-                    content_type="text/markdown"
+                    content_type="text/markdown",
                 )
                 logger.info(f"[Workflow] Report saved to storage: {report_url}")
             except Exception as storage_error:
@@ -394,15 +419,18 @@ class ResearchWorkflowGraph:
                 report_url = f"/reports/{state['workflow_id']}"
 
             await self.event_publisher.publish_result_event(
-                workflow_id=state["workflow_id"],
-                report_url=report_url
+                workflow_id=state["workflow_id"], report_url=report_url
             )
 
             if report_generated:
                 try:
-                    logger.info(f"[Workflow] Creating evaluation record for workflow {state['workflow_id']}")
+                    logger.info(
+                        f"[Workflow] Creating evaluation record for workflow {state['workflow_id']}"
+                    )
                     scenario_id = state.get("scenario_id", "dev_survey_v1")
-                    evaluation = await self.evaluation_service.create_evaluation(workflow_id, scenario_id)
+                    evaluation = await self.evaluation_service.create_evaluation(
+                        workflow_id, scenario_id
+                    )
                     evaluation_id = evaluation.evaluation_id
 
                     asyncio.create_task(
@@ -417,7 +445,7 @@ class ResearchWorkflowGraph:
                             retrieved_documents=retrieved_documents,
                             citations=citations,
                             evaluation_service=self.evaluation_service,
-                            evaluation_orchestrator=self.evaluation_orchestrator
+                            evaluation_orchestrator=self.evaluation_orchestrator,
                         )
                     )
                     logger.info(f"[Workflow] Async evaluation task triggered: {evaluation_id}")
@@ -430,12 +458,12 @@ class ResearchWorkflowGraph:
 
             # 尝试使用已有的任务摘要生成最小化报告作为降级方案
             try:
-                logger.warning(f"[Workflow] Attempting minimal report generation as fallback")
+                logger.warning("[Workflow] Attempting minimal report generation as fallback")
                 minimal_report = await self._generate_minimal_report(state)
                 if minimal_report:
                     report_content = minimal_report
                     report_generated = True
-                    logger.info(f"[Workflow] Minimal report generated successfully")
+                    logger.info("[Workflow] Minimal report generated successfully")
 
                     # 保存简化报告
                     try:
@@ -445,12 +473,11 @@ class ResearchWorkflowGraph:
                             bucket_name="reports",
                             object_name=report_filename,
                             data=report_content_bytes,
-                            content_type="text/markdown"
+                            content_type="text/markdown",
                         )
                         logger.info(f"[Workflow] Minimal report saved to storage: {report_url}")
                         await self.event_publisher.publish_result_event(
-                            workflow_id=state["workflow_id"],
-                            report_url=report_url
+                            workflow_id=state["workflow_id"], report_url=report_url
                         )
                     except Exception as storage_error:
                         logger.error(f"[Workflow] Failed to save minimal report: {storage_error}")
@@ -459,7 +486,7 @@ class ResearchWorkflowGraph:
 
             await self.event_publisher.publish_error_event(
                 workflow_id=state["workflow_id"],
-                message=f"Report generation failed: {report_error}"
+                message=f"Report generation failed: {report_error}",
             )
 
         if report_generated:
@@ -481,7 +508,7 @@ class ResearchWorkflowGraph:
             "workflow_status": workflow_status,
             "task_summary": task_summary,
             "citations": citations,
-            "updated_at": get_current_utc_time()
+            "updated_at": get_current_utc_time(),
         }
 
         if report_error:
@@ -510,7 +537,9 @@ class ResearchWorkflowGraph:
                     report_parts.append("")
 
             report_parts.append("---")
-            report_parts.append("*Note: This is a minimal report due to full report generation failure.*")
+            report_parts.append(
+                "*Note: This is a minimal report due to full report generation failure.*"
+            )
 
             return "\n".join(report_parts)
         except Exception as e:

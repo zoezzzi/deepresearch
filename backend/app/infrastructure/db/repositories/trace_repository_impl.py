@@ -4,24 +4,24 @@ Trace 仓储实现
 基于 SQLAlchemy 的追踪数据持久化实现
 每个方法内部管理自己的 Session（通过 get_db_session 上下文管理器）
 """
-import time
-from typing import Optional, List
-from sqlalchemy.orm import Session
-from sqlalchemy import exc
 
-from app.infrastructure.db.models import WorkflowTraceModel, WorkflowTaskTraceModel
-from app.infrastructure.db.session import get_db_session
+import time
+
+from sqlalchemy.orm import Session
+
+from app.infrastructure.db.models import WorkflowTaskTraceModel, WorkflowTraceModel
+from harness.db.session import get_db_session
+from harness.logger import logger
 from harness.observability.trace_models import (
-    WorkflowTraceCreate,
-    WorkflowTraceUpdate,
-    TaskTraceCreate,
-    TaskTraceUpdate,
-    WorkflowTraceResponse,
-    TaskTraceResponse,
     PerformanceSummary,
+    TaskTraceCreate,
+    TaskTraceResponse,
+    TaskTraceUpdate,
+    WorkflowTraceCreate,
+    WorkflowTraceResponse,
+    WorkflowTraceUpdate,
 )
 from harness.observability.trace_repository import TraceRepository
-from harness.logger import logger
 
 
 def _calculate_duration_ms(started_at, completed_at):
@@ -46,7 +46,7 @@ def _retry_with_backoff(operation_name: str, func, max_attempts: int = 3):
         except Exception as e:
             last_error = e
             if attempt < max_attempts - 1:
-                wait_time = 1.0 * (2 ** attempt)
+                wait_time = 1.0 * (2**attempt)
                 logger.warning(
                     f"[TraceRepository] {operation_name} failed (attempt {attempt + 1}/{max_attempts}), "
                     f"retrying in {wait_time:.1f}s: {e}"
@@ -91,9 +91,11 @@ class TraceRepositoryImpl(TraceRepository):
 
     async def update_workflow_trace(self, workflow_id: str, update: WorkflowTraceUpdate) -> None:
         def _update(db: Session):
-            model = db.query(WorkflowTraceModel).filter(
-                WorkflowTraceModel.workflow_id == workflow_id
-            ).first()
+            model = (
+                db.query(WorkflowTraceModel)
+                .filter(WorkflowTraceModel.workflow_id == workflow_id)
+                .first()
+            )
             if model:
                 if update.completed_at is not None:
                     model.completed_at = update.completed_at
@@ -153,9 +155,11 @@ class TraceRepositoryImpl(TraceRepository):
 
     async def update_task_trace(self, span_id: str, update: TaskTraceUpdate) -> None:
         def _update(db: Session):
-            model = db.query(WorkflowTaskTraceModel).filter(
-                WorkflowTaskTraceModel.span_id == span_id
-            ).first()
+            model = (
+                db.query(WorkflowTaskTraceModel)
+                .filter(WorkflowTaskTraceModel.span_id == span_id)
+                .first()
+            )
             if model:
                 if update.completed_at is not None:
                     model.completed_at = update.completed_at
@@ -191,18 +195,23 @@ class TraceRepositoryImpl(TraceRepository):
         else:
             logger.warning(f"[TraceRepository] Task trace not found for update: {span_id}")
 
-    async def get_trace_by_workflow_id(self, workflow_id: str) -> Optional[WorkflowTraceResponse]:
-        def _query(db: Session) -> Optional[WorkflowTraceResponse]:
-            trace_model = db.query(WorkflowTraceModel).filter(
-                WorkflowTraceModel.workflow_id == workflow_id
-            ).first()
+    async def get_trace_by_workflow_id(self, workflow_id: str) -> WorkflowTraceResponse | None:
+        def _query(db: Session) -> WorkflowTraceResponse | None:
+            trace_model = (
+                db.query(WorkflowTraceModel)
+                .filter(WorkflowTraceModel.workflow_id == workflow_id)
+                .first()
+            )
 
             if not trace_model:
                 return None
 
-            task_models = db.query(WorkflowTaskTraceModel).filter(
-                WorkflowTaskTraceModel.workflow_id == workflow_id
-            ).order_by(WorkflowTaskTraceModel.task_order).all()
+            task_models = (
+                db.query(WorkflowTaskTraceModel)
+                .filter(WorkflowTaskTraceModel.workflow_id == workflow_id)
+                .order_by(WorkflowTaskTraceModel.task_order)
+                .all()
+            )
 
             task_responses = []
             for t in task_models:
@@ -230,9 +239,7 @@ class TraceRepositoryImpl(TraceRepository):
                 )
 
             performance_summary = self._calculate_performance_summary(
-                task_responses,
-                trace_model.duration_ms,
-                trace_model.execute_duration_ms
+                task_responses, trace_model.duration_ms, trace_model.execute_duration_ms
             )
 
             # 如果 workflow 的 langsmith_run_id 为空，就用 trace_id 作为默认值
@@ -261,11 +268,14 @@ class TraceRepositoryImpl(TraceRepository):
             logger.error(f"[TraceRepository] Failed to get trace by workflow_id: {e}")
             return None
 
-    async def get_task_traces_by_workflow_id(self, workflow_id: str) -> List[TaskTraceResponse]:
-        def _query(db: Session) -> List[TaskTraceResponse]:
-            task_models = db.query(WorkflowTaskTraceModel).filter(
-                WorkflowTaskTraceModel.workflow_id == workflow_id
-            ).order_by(WorkflowTaskTraceModel.task_order).all()
+    async def get_task_traces_by_workflow_id(self, workflow_id: str) -> list[TaskTraceResponse]:
+        def _query(db: Session) -> list[TaskTraceResponse]:
+            task_models = (
+                db.query(WorkflowTaskTraceModel)
+                .filter(WorkflowTaskTraceModel.workflow_id == workflow_id)
+                .order_by(WorkflowTaskTraceModel.task_order)
+                .all()
+            )
 
             return [
                 TaskTraceResponse(
@@ -296,17 +306,18 @@ class TraceRepositoryImpl(TraceRepository):
 
     def _calculate_performance_summary(
         self,
-        task_responses: List[TaskTraceResponse],
-        total_duration_ms: Optional[int],
-        execute_duration_ms: Optional[int] = None,
-    ) -> Optional[PerformanceSummary]:
+        task_responses: list[TaskTraceResponse],
+        total_duration_ms: int | None,
+        execute_duration_ms: int | None = None,
+    ) -> PerformanceSummary | None:
         completed_tasks = [
-            t for t in task_responses
-            if t.duration_ms is not None and t.status == "completed"
+            t for t in task_responses if t.duration_ms is not None and t.status == "completed"
         ]
 
         if not completed_tasks:
-            logger.warning(f"[TraceRepository] No completed tasks for performance summary, returning default summary")
+            logger.warning(
+                "[TraceRepository] No completed tasks for performance summary, returning default summary"
+            )
             # 返回默认值，确保字段不为空
             return PerformanceSummary(
                 total_duration_ms=total_duration_ms,
@@ -338,10 +349,12 @@ class TraceRepositoryImpl(TraceRepository):
                 speedup_ratio = round(sequential_total / estimated_parallel_time, 2)
             else:
                 speedup_ratio = 1.0
-        
-        logger.info(f"[TraceRepository] Performance summary calculated: speedup_ratio={speedup_ratio}, "
-                   f"tasks={len(completed_tasks)}, sequential={sequential_total}ms, "
-                   f"execute={execute_duration_ms}ms")
+
+        logger.info(
+            f"[TraceRepository] Performance summary calculated: speedup_ratio={speedup_ratio}, "
+            f"tasks={len(completed_tasks)}, sequential={sequential_total}ms, "
+            f"execute={execute_duration_ms}ms"
+        )
 
         return PerformanceSummary(
             total_duration_ms=total_duration_ms,

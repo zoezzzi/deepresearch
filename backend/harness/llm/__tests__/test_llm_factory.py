@@ -1,4 +1,3 @@
-
 """
 LLM Client 工厂测试模块
 
@@ -7,19 +6,21 @@ LLM Client 工厂测试模块
 2. 缓存生命周期测试：TTL 过期、清理、定向删除
 3. 客户端创建测试：正常、错误场景
 """
-import threading
-import time
+
 import asyncio
+import threading
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from harness.llm.factory import (
-    get_llm_client,
-    clear_llm_client_cache,
-    remove_llm_client,
-    _client_cache,
-    _cache_lock
-)
+
 from harness.llm.base import LLMClient
+from harness.llm.factory import (
+    _cache_lock,
+    _client_cache,
+    clear_llm_client_cache,
+    get_llm_client,
+    remove_llm_client,
+)
 from harness.llm.langchain_client import LangChainClient
 
 
@@ -42,14 +43,14 @@ class TestLLMFactory:
 
     def test_get_llm_client_by_name(self):
         """测试通过名称获取 LLM 客户端"""
-        client = get_llm_client('openai')
+        client = get_llm_client("openai")
         assert client is not None
-        assert 'openai' in _client_cache
+        assert "openai" in _client_cache
 
     def test_get_llm_client_cached(self):
         """测试缓存复用"""
-        client1 = get_llm_client('qwen')
-        client2 = get_llm_client('qwen')
+        client1 = get_llm_client("qwen")
+        client2 = get_llm_client("qwen")
         assert client1 is client2, "同一个名称应该返回同一个实例"
 
     def test_thread_safety_concurrent_creation(self):
@@ -59,7 +60,7 @@ class TestLLMFactory:
 
         def get_client():
             try:
-                client = get_llm_client('qwen')
+                client = get_llm_client("qwen")
                 clients.append(client)
             except Exception as e:
                 errors.append(e)
@@ -83,10 +84,10 @@ class TestLLMFactory:
     def test_cache_clear(self):
         """测试清空缓存"""
         # 先创建客户端
-        client1 = get_llm_client('qwen')
+        client1 = get_llm_client("qwen")
         # 再创建一个
-        client2 = get_llm_client('openai')
-        
+        get_llm_client("openai")
+
         assert len(_client_cache) == 2
 
         # 清空缓存
@@ -94,30 +95,30 @@ class TestLLMFactory:
         assert len(_client_cache) == 0, "缓存应该被清空"
 
         # 再次获取，应该创建新实例
-        client3 = get_llm_client('qwen')
+        client3 = get_llm_client("qwen")
         assert client3 is not None
         assert client3 is not client1, "清空后应该创建新实例"
 
     def test_remove_client(self):
         """测试定向删除客户端"""
         # 创建两个客户端
-        client_qwen = get_llm_client('qwen')
-        client_openai = get_llm_client('openai')
-        assert 'qwen' in _client_cache
-        assert 'openai' in _client_cache
+        get_llm_client("qwen")
+        get_llm_client("openai")
+        assert "qwen" in _client_cache
+        assert "openai" in _client_cache
 
         # 删除 qwen
-        asyncio.run(remove_llm_client('qwen'))
-        assert 'qwen' not in _client_cache
-        assert 'openai' in _client_cache  # openai 应该还在
+        asyncio.run(remove_llm_client("qwen"))
+        assert "qwen" not in _client_cache
+        assert "openai" in _client_cache  # openai 应该还在
 
         # 删除 openai
-        asyncio.run(remove_llm_client('openai'))
-        assert 'openai' not in _client_cache
+        asyncio.run(remove_llm_client("openai"))
+        assert "openai" not in _client_cache
 
     def test_close_client(self):
         """测试关闭客户端"""
-        client = get_llm_client('qwen')
+        client = get_llm_client("qwen")
         assert client._closed is False  # 应该未关闭
 
         # 调用关闭
@@ -130,7 +131,7 @@ class TestLLMFactory:
     def test_unknown_client_error(self):
         """测试未知客户端错误"""
         with pytest.raises(ValueError, match="Unknown LLM client"):
-            get_llm_client('unknown_provider_that_does_not_exist')
+            get_llm_client("unknown_provider_that_does_not_exist")
 
 
 class TestLangChainClient:
@@ -141,7 +142,7 @@ class TestLangChainClient:
         client = LangChainClient()
         assert client._client is None
         assert client._closed is False
-        assert hasattr(client, '_client_params')
+        assert hasattr(client, "_client_params")
 
     def test_get_client(self):
         """测试获取底层客户端"""
@@ -171,22 +172,22 @@ class TestCacheTTL:
         """测试 TTL 过期（使用 Patch 加速）"""
         # 使用 Patch 来模拟时间流逝
         current_time = 1000
-        
-        with patch('harness.llm.factory.time.monotonic') as mock_monotonic:
+
+        with patch("harness.llm.factory.time.monotonic") as mock_monotonic:
             # 初始时间
             mock_monotonic.side_effect = lambda: current_time
-            
-            client1 = get_llm_client('qwen')
-            assert 'qwen' in _client_cache
+
+            client1 = get_llm_client("qwen")
+            assert "qwen" in _client_cache
 
             # 稍微过一点时间，但未过期
             current_time = 1000 + 1800  # 30分钟 - 一点
-            client2 = get_llm_client('qwen')
+            client2 = get_llm_client("qwen")
             assert client2 is client1, "TTL 内应该复用实例"
 
             # 超过 TTL
             current_time = 1000 + 3600  # 超过 30分钟
-            client3 = get_llm_client('qwen')
+            client3 = get_llm_client("qwen")
             assert client3 is not client1, "超过 TTL 应该创建新实例"
 
 

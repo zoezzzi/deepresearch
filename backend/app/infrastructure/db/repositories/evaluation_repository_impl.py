@@ -1,10 +1,10 @@
-from typing import Optional, List
 from sqlalchemy.orm import Session
-from app.research_assistant.repositories import EvaluationRepository
-from app.research_assistant.models.models import EvaluationResult
-from app.research_assistant.models.enums import EvaluationStatus
+
 from app.infrastructure.db.models import EvaluationModel
-from app.infrastructure.db.session import with_db_retry
+from app.research_assistant.models.enums import EvaluationStatus
+from app.research_assistant.models.models import EvaluationResult
+from app.research_assistant.repositories import EvaluationRepository
+from harness.db.session import with_db_retry
 from harness.logger import logger
 
 
@@ -26,7 +26,9 @@ class EvaluationRepositoryImpl(EvaluationRepository):
             evaluation_id=model.evaluation_id,
             workflow_id=model.workflow_id,
             scenario_id=model.scenario_id,
-            status=EvaluationStatus(model.status) if isinstance(model.status, str) else model.status,
+            status=EvaluationStatus(model.status)
+            if isinstance(model.status, str)
+            else model.status,
             metrics=model.metrics or {},
             overall_score=model.overall_score,
             error_message=model.error_message,
@@ -34,7 +36,7 @@ class EvaluationRepositoryImpl(EvaluationRepository):
             started_at=model.started_at,
             completed_at=model.completed_at,
             created_at=model.created_at,
-            updated_at=model.updated_at
+            updated_at=model.updated_at,
         )
 
     def _to_persistence_model(self, evaluation: EvaluationResult) -> EvaluationModel:
@@ -50,7 +52,7 @@ class EvaluationRepositoryImpl(EvaluationRepository):
             started_at=evaluation.started_at,
             completed_at=evaluation.completed_at,
             created_at=evaluation.created_at,
-            updated_at=evaluation.updated_at
+            updated_at=evaluation.updated_at,
         )
 
     async def save(self, evaluation: EvaluationResult) -> None:
@@ -69,12 +71,16 @@ class EvaluationRepositoryImpl(EvaluationRepository):
             self.db_session.rollback()
             raise
 
-    async def find_by_id(self, evaluation_id: str) -> Optional[EvaluationResult]:
+    async def find_by_id(self, evaluation_id: str) -> EvaluationResult | None:
         logger.info(f"[EvaluationRepositoryImpl] Finding evaluation by id: {evaluation_id}")
 
         @with_db_retry(max_attempts=3)
         def _find():
-            model = self.db_session.query(EvaluationModel).filter_by(evaluation_id=evaluation_id).first()
+            model = (
+                self.db_session.query(EvaluationModel)
+                .filter_by(evaluation_id=evaluation_id)
+                .first()
+            )
             if not model:
                 return None
             return self._to_domain_entity(model)
@@ -87,12 +93,17 @@ class EvaluationRepositoryImpl(EvaluationRepository):
             self.db_session.rollback()
             raise
 
-    async def find_by_workflow_id(self, workflow_id: str) -> List[EvaluationResult]:
+    async def find_by_workflow_id(self, workflow_id: str) -> list[EvaluationResult]:
         logger.info(f"[EvaluationRepositoryImpl] Finding evaluations by workflow id: {workflow_id}")
 
         @with_db_retry(max_attempts=3)
         def _find():
-            models = self.db_session.query(EvaluationModel).filter_by(workflow_id=workflow_id).order_by(EvaluationModel.created_at.desc()).all()
+            models = (
+                self.db_session.query(EvaluationModel)
+                .filter_by(workflow_id=workflow_id)
+                .order_by(EvaluationModel.created_at.desc())
+                .all()
+            )
             return [self._to_domain_entity(model) for model in models]
 
         try:
@@ -108,7 +119,11 @@ class EvaluationRepositoryImpl(EvaluationRepository):
 
         @with_db_retry(max_attempts=3)
         def _update():
-            model = self.db_session.query(EvaluationModel).filter_by(evaluation_id=evaluation.evaluation_id).first()
+            model = (
+                self.db_session.query(EvaluationModel)
+                .filter_by(evaluation_id=evaluation.evaluation_id)
+                .first()
+            )
             if model:
                 model.status = evaluation.status
                 model.scenario_id = evaluation.scenario_id

@@ -1,5 +1,5 @@
-from typing import List, Dict, Any
 import uuid
+
 from app.dev_survey.agents import PlanAgent
 from app.dev_survey.models.models import Task
 from harness.logger import logger
@@ -10,11 +10,8 @@ class ResearchPlanService:
         self.plan_agent = plan_agent
 
     async def generate_tasks(
-        self,
-        workflow_id: str,
-        topic: str,
-        description: str = ""
-    ) -> List[Task]:
+        self, workflow_id: str, topic: str, description: str = ""
+    ) -> list[Task]:
         logger.info(f"[ResearchPlanService] Generating tasks for workflow: {workflow_id}")
 
         try:
@@ -32,7 +29,7 @@ class ResearchPlanService:
                     title=task_data.get("title", "Untitled Task"),
                     intent=task_data.get("intent", f"Research about {topic}"),
                     query=task_data.get("query", topic),
-                    order=order
+                    order=order,
                 )
                 tasks.append(task)
 

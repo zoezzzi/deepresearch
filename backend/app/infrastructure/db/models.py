@@ -1,7 +1,8 @@
-from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, Float, JSON, BigInteger
+from sqlalchemy import JSON, BigInteger, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
-from .session import Base
+
 from app.common.utils.time_utils import get_current_utc_time
+from harness.db.session import Base
 
 
 class WorkflowModel(Base):
@@ -14,12 +15,24 @@ class WorkflowModel(Base):
     status = Column(String(50), nullable=False, default="pending")
     report_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=get_current_utc_time,
+        onupdate=get_current_utc_time,
+        nullable=False,
+    )
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
-    tasks = relationship("TaskModel", back_populates="workflow", cascade="all, delete-orphan", order_by="TaskModel.order")
-    evaluations = relationship("EvaluationModel", back_populates="workflow", cascade="all, delete-orphan")
+    tasks = relationship(
+        "TaskModel",
+        back_populates="workflow",
+        cascade="all, delete-orphan",
+        order_by="TaskModel.order",
+    )
+    evaluations = relationship(
+        "EvaluationModel", back_populates="workflow", cascade="all, delete-orphan"
+    )
 
 
 class TaskModel(Base):
@@ -37,7 +50,12 @@ class TaskModel(Base):
     sources_summary = Column(Text, nullable=True)
     notices = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=get_current_utc_time,
+        onupdate=get_current_utc_time,
+        nullable=False,
+    )
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -46,24 +64,30 @@ class TaskModel(Base):
 
 class EvaluationModel(Base):
     __tablename__ = "evaluation_results"
-    
+
     evaluation_id = Column(String, primary_key=True, index=True)
     workflow_id = Column(String, ForeignKey("workflows.workflow_id"), nullable=False, index=True)
     scenario_id = Column(String, nullable=True, index=True)
-    
+
     # 动态指标存储：支持任意场景的评估指标
     metrics = Column(JSON, nullable=False, default=dict)
     overall_score = Column(Float, nullable=True)
-    
+
     status = Column(String(50), default="pending", nullable=False, index=True)
     error_message = Column(Text, nullable=True)
     evaluation_details = Column(JSON, nullable=True)
-    
+
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False, index=True)
-    
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=get_current_utc_time,
+        onupdate=get_current_utc_time,
+        nullable=False,
+        index=True,
+    )
+
     workflow = relationship("WorkflowModel", back_populates="evaluations")
 
 
@@ -92,7 +116,12 @@ class WorkflowTraceModel(Base):
     output_report_url = Column(String(512), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=get_current_utc_time,
+        onupdate=get_current_utc_time,
+        nullable=False,
+    )
 
 
 class WorkflowTaskTraceModel(Base):
@@ -124,4 +153,9 @@ class WorkflowTaskTraceModel(Base):
     retry_count = Column(Integer, default=0)
 
     created_at = Column(DateTime(timezone=True), default=get_current_utc_time, nullable=False)
-    updated_at = Column(DateTime(timezone=True), default=get_current_utc_time, onupdate=get_current_utc_time, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=get_current_utc_time,
+        onupdate=get_current_utc_time,
+        nullable=False,
+    )

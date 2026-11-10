@@ -1,12 +1,10 @@
-import asyncio
-from typing import List
+from app.dev_survey.models.models import Task
+from app.dev_survey.prompts.generate_agent_prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from app.dev_survey.validators.report_validator import ReportValidator
 from harness.agents.base import Agent
 from harness.agents.template_renderer import TemplateRenderer
 from harness.config import get_harness_settings
 from harness.logger import logger
-from app.dev_survey.models.models import Task
-from app.dev_survey.prompts.generate_agent_prompts import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
-from app.dev_survey.validators.report_validator import ReportValidator
 
 settings = get_harness_settings()
 
@@ -17,7 +15,7 @@ class GenerateAgent(Agent):
         self.llm_client = llm_client
         self.timeout = settings.LLM_TIMEOUT_REPORT
 
-    async def execute(self, topic: str, tasks: List[Task]) -> str:
+    async def execute(self, topic: str, tasks: list[Task]) -> str:
         logger.info(f"[{self.name}] Generating research report for topic: {topic}")
 
         try:
@@ -43,17 +41,19 @@ class GenerateAgent(Agent):
                 USER_PROMPT_TEMPLATE,
                 topic=topic,
                 task_summaries="".join(task_summaries),
-                available_sources=available_sources
+                available_sources=available_sources,
             )
 
-            logger.info(f"[{self.name}] Attempting to generate report with timeout: {self.timeout}s")
+            logger.info(
+                f"[{self.name}] Attempting to generate report with timeout: {self.timeout}s"
+            )
             try:
                 current_report = await self.llm_client.chat(
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": prompt},
                     ],
-                    timeout=self.timeout
+                    timeout=self.timeout,
                 )
 
                 logger.info(f"[{self.name}] Successfully generated research report")
@@ -64,39 +64,47 @@ class GenerateAgent(Agent):
                 for attempt in range(max_tries):
                     is_valid, missing_sections = validator.validate(current_report)
                     if is_valid:
-                        logger.info(f"[{self.name}] Report validation passed on attempt {attempt + 1}")
+                        logger.info(
+                            f"[{self.name}] Report validation passed on attempt {attempt + 1}"
+                        )
                         break
 
-                    logger.warning(f"[{self.name}] Report missing sections on attempt {attempt + 1}: {missing_sections}, generating supplement")
-                    supplement = await self._generate_supplement(topic, current_report, missing_sections)
+                    logger.warning(
+                        f"[{self.name}] Report missing sections on attempt {attempt + 1}: {missing_sections}, generating supplement"
+                    )
+                    supplement = await self._generate_supplement(
+                        topic, current_report, missing_sections
+                    )
                     current_report = self._merge_supplement(current_report, supplement)
 
                 return current_report
             except Exception as e:
-                logger.warning(f"[{self.name}] Report generation failed, trying simplified report: {str(e)}")
+                logger.warning(
+                    f"[{self.name}] Report generation failed, trying simplified report: {str(e)}"
+                )
                 return await self._generate_simplified_report(topic, tasks)
 
         except Exception as e:
             logger.error(f"[{self.name}] Report generation failed: {str(e)}")
             raise
 
-    def _collect_sources(self, tasks: List[Task]) -> str:
+    def _collect_sources(self, tasks: list[Task]) -> str:
         sources = []
         seen_urls = set()
 
         for task in sorted(tasks, key=lambda t: t.order):
             if task.sources_summary:
-                for line in task.sources_summary.split('\n'):
+                for line in task.sources_summary.split("\n"):
                     line = line.strip()
-                    if line.startswith('- ') or line.startswith('* '):
+                    if line.startswith("- ") or line.startswith("* "):
                         line = line[2:]
-                    for url_pattern in ['http://', 'https://']:
+                    for url_pattern in ["http://", "https://"]:
                         idx = line.find(url_pattern)
                         if idx != -1:
-                            url = line[idx:].split()[0].rstrip(')')
+                            url = line[idx:].split()[0].rstrip(")")
                             if url not in seen_urls:
                                 seen_urls.add(url)
-                                sources.append(f"[{len(sources)+1}] {line}")
+                                sources.append(f"[{len(sources) + 1}] {line}")
                                 break
 
         if not sources:
@@ -104,7 +112,9 @@ class GenerateAgent(Agent):
 
         return "\n".join(sources)
 
-    async def _generate_supplement(self, topic: str, report: str, missing_sections: List[str]) -> str:
+    async def _generate_supplement(
+        self, topic: str, report: str, missing_sections: list[str]
+    ) -> str:
         sections_text = "、".join(missing_sections)
         prompt = (
             f"以下技术调研报告缺少必要章节：{sections_text}。"
@@ -115,8 +125,7 @@ class GenerateAgent(Agent):
 
         try:
             response = await self.llm_client.chat(
-                [{"role": "user", "content": prompt}],
-                timeout=self.timeout
+                [{"role": "user", "content": prompt}], timeout=self.timeout
             )
             return response
         except Exception:
@@ -128,7 +137,7 @@ class GenerateAgent(Agent):
             return report
         return report + "\n\n" + supplement
 
-    async def _generate_simplified_report(self, topic: str, tasks: List[Task]) -> str:
+    async def _generate_simplified_report(self, topic: str, tasks: list[Task]) -> str:
         """生成简化版本的报告（降级策略）"""
         logger.info(f"[{self.name}] Generating simplified report for topic: {topic}")
 
@@ -146,11 +155,15 @@ class GenerateAgent(Agent):
                     report_parts.append("")
 
             report_parts.append("---")
-            report_parts.append("*Note: This is a simplified version due to report generation timeout.*")
+            report_parts.append(
+                "*Note: This is a simplified version due to report generation timeout.*"
+            )
 
             return "\n".join(report_parts)
         except Exception as e:
             logger.error(f"[{self.name}] Simplified report generation also failed: {str(e)}")
             # 返回最基本的报告
-            completed_count = len([t for t in tasks if hasattr(t, "status") and t.status == "completed"])
+            completed_count = len(
+                [t for t in tasks if hasattr(t, "status") and t.status == "completed"]
+            )
             return f"# {topic}\n\nReport generation failed. {completed_count} tasks completed successfully."

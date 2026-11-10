@@ -1,4 +1,3 @@
-from typing import List
 from harness.agents.base import Agent
 from harness.logger import logger
 
@@ -8,7 +7,7 @@ class SearchAgent(Agent):
         super().__init__("SearchAgent")
         self.search_source = search_source
 
-    async def execute(self, query: str) -> List:
+    async def execute(self, query: str) -> list:
         logger.info(f"[{self.name}] Searching for: {query}")
 
         try:

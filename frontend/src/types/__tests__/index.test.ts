@@ -37,8 +37,8 @@ describe('WorkflowStatus 类型', () => {
       'all_failed',
       'report_failed'
     ]
-    
-    validStatuses.forEach(status => {
+
+    validStatuses.forEach((status) => {
       const displayStatus = mapWorkflowStatusToDisplay(status)
       expect(['pending', 'running', 'completed', 'failed']).toContain(displayStatus)
     })

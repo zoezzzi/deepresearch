@@ -7,6 +7,7 @@ harness 层异常定义
 
 class CheckpointConnectionError(Exception):
     """Checkpoint 连接错误"""
+
     def __init__(self, message: str, thread_id: str = None, retry_count: int = 0):
         self.message = message
         self.thread_id = thread_id

@@ -3,30 +3,32 @@
 
 定义 LangGraph 工作流的状态结构
 """
-from typing import TypedDict, List, Optional, Any, Dict
+
 from datetime import datetime
+from typing import Any, TypedDict
 
 
 class WorkflowState(TypedDict, total=False):
+    """State passed between LangGraph nodes of the research workflow.
+
+    ``total=False`` because nodes return only the fields they update; keys they
+    omit keep the values from the previous checkpoint.
     """
-    调研工作流状态
-    
-    用于在 LangGraph 工作流节点之间传递状态
-    """
+
     workflow_id: str
     topic: str
-    description: Optional[str]
-    scenario_id: Optional[str]
-    tasks: List[Dict[str, Any]]
+    description: str | None
+    scenario_id: str | None
+    tasks: list[dict[str, Any]]
     current_task_index: int
-    task_results: List[Dict[str, Any]]
-    report_content: Optional[str]
-    report_url: Optional[str]
-    error: Optional[str]
+    task_results: list[dict[str, Any]]
+    report_content: str | None
+    report_url: str | None
+    error: str | None
     created_at: datetime
     updated_at: datetime
-    workflow_status: Optional[str]
-    task_summary: Optional[Dict[str, int]]
-    retrieved_chunks: Optional[List[str]]
-    sub_questions: Optional[List[str]]
-    citations: Optional[List[str]]
+    workflow_status: str | None
+    task_summary: dict[str, int] | None
+    retrieved_chunks: list[str] | None
+    sub_questions: list[str] | None
+    citations: list[str] | None

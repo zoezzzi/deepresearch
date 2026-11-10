@@ -3,16 +3,37 @@
 - checklist_coverage（清单覆盖度）：继承原 Coverage，sub_questions → checklist_items
 - template_compliance（模板合规性）：替代原 Structure
 """
+
 import json
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Any
 
 from harness.evaluation.base_evaluator import BaseEvaluator
 from harness.evaluation.llm_judge_evaluator import LLMJudgeEvaluator
 from harness.logger import logger
 
 CHINESE_STOP_WORDS = frozenset(
-    "的 与 和 及 等 了 在 是 对 于 从 到 为 中 分析 研究 调研 了解 探索".split()
+    [
+        "的",
+        "与",
+        "和",
+        "及",
+        "等",
+        "了",
+        "在",
+        "是",
+        "对",
+        "于",
+        "从",
+        "到",
+        "为",
+        "中",
+        "分析",
+        "研究",
+        "调研",
+        "了解",
+        "探索",
+    ]
 )
 
 
@@ -21,7 +42,7 @@ class ComplianceEvaluator(BaseEvaluator):
         self.llm_client = llm_client
         self._llm_judge = LLMJudgeEvaluator(llm_client)
 
-    async def evaluate(self, **kwargs) -> Dict[str, float]:
+    async def evaluate(self, **kwargs) -> dict[str, float]:
         logger.info("[ComplianceEvaluator] Evaluating checklist coverage and template compliance")
 
         scores = {}
@@ -31,13 +52,10 @@ class ComplianceEvaluator(BaseEvaluator):
 
         try:
             scores["checklist_coverage"] = await self._evaluate_checklist_coverage(
-                report,
-                checklist_items
+                report, checklist_items
             )
 
-            scores["template_compliance"] = await self._evaluate_template_compliance(
-                report
-            )
+            scores["template_compliance"] = await self._evaluate_template_compliance(report)
 
             scores["citation_coverage"] = self._evaluate_citation_coverage(report)
 
@@ -46,22 +64,14 @@ class ComplianceEvaluator(BaseEvaluator):
 
         except Exception as e:
             logger.error(f"[ComplianceEvaluator] Error: {str(e)}, using fallback")
-            return {
-                "checklist_coverage": 0.0,
-                "template_compliance": 0.0,
-                "citation_coverage": 0.0
-            }
+            return {"checklist_coverage": 0.0, "template_compliance": 0.0, "citation_coverage": 0.0}
 
-    async def _evaluate_checklist_coverage(
-        self,
-        report: str,
-        checklist_items: List[str]
-    ) -> float:
+    async def _evaluate_checklist_coverage(self, report: str, checklist_items: list[str]) -> float:
         if not checklist_items:
             return 0.0
 
         report_lower = report.lower()
-        covered: List[bool] = [False] * len(checklist_items)
+        covered: list[bool] = [False] * len(checklist_items)
 
         for i, item in enumerate(checklist_items):
             item_lower = item.lower()
@@ -103,44 +113,44 @@ class ComplianceEvaluator(BaseEvaluator):
 
         return sum(covered) / len(checklist_items)
 
-    def _extract_chinese_keywords(self, text: str) -> List[str]:
-        cleaned = re.sub(r'[^\u4e00-\u9fff]', '', text)
+    def _extract_chinese_keywords(self, text: str) -> list[str]:
+        cleaned = re.sub(r"[^\u4e00-\u9fff]", "", text)
         if not cleaned:
             return []
 
         for stop_word in CHINESE_STOP_WORDS:
-            cleaned = cleaned.replace(stop_word, '')
+            cleaned = cleaned.replace(stop_word, "")
 
-        keywords: List[str] = []
+        keywords: list[str] = []
         for n in range(4, 1, -1):
             i = 0
             while i <= len(cleaned) - n:
-                segment = cleaned[i:i + n]
+                segment = cleaned[i : i + n]
                 keywords.append(segment)
                 i += n
             cleaned = cleaned[i:]
 
-        remaining = re.sub(r'[^\u4e00-\u9fff]', '', cleaned)
+        remaining = re.sub(r"[^\u4e00-\u9fff]", "", cleaned)
         if len(remaining) >= 2:
             keywords.append(remaining)
 
         return [kw for kw in keywords if len(kw) >= 2]
 
     def _ngram_match_score(self, item: str, text: str, n: int = 2) -> float:
-        item_chars = re.sub(r'\s+', '', item)
-        text_chars = re.sub(r'\s+', '', text)
+        item_chars = re.sub(r"\s+", "", item)
+        text_chars = re.sub(r"\s+", "", text)
 
         if len(item_chars) < n:
             return 0.0
 
-        item_ngrams = [item_chars[i:i + n] for i in range(len(item_chars) - n + 1)]
+        item_ngrams = [item_chars[i : i + n] for i in range(len(item_chars) - n + 1)]
         if not item_ngrams:
             return 0.0
 
         matched = sum(1 for ng in item_ngrams if ng in text_chars)
         return matched / len(item_ngrams)
 
-    async def _llm_semantic_coverage(self, report: str, uncovered_items: List[str]) -> List[bool]:
+    async def _llm_semantic_coverage(self, report: str, uncovered_items: list[str]) -> list[bool]:
         if not uncovered_items:
             return []
 
@@ -155,10 +165,15 @@ class ComplianceEvaluator(BaseEvaluator):
             f"covered 数组长度必须与待查项列表长度一致。"
         )
 
-        response = await self.llm_client.chat([
-            {"role": "system", "content": "你是一位专业的报告内容评估专家，擅长判断报告是否涵盖了特定主题。"},
-            {"role": "user", "content": prompt}
-        ])
+        response = await self.llm_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": "你是一位专业的报告内容评估专家，擅长判断报告是否涵盖了特定主题。",
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
 
         result = self._parse_json_response(response)
         if result and "covered" in result and isinstance(result["covered"], list):
@@ -172,10 +187,10 @@ class ComplianceEvaluator(BaseEvaluator):
 
         return [False] * len(uncovered_items)
 
-    def _parse_json_response(self, response: str) -> Dict[str, Any]:
+    def _parse_json_response(self, response: str) -> dict[str, Any]:
         try:
-            start_idx = response.find('{')
-            end_idx = response.rfind('}') + 1
+            start_idx = response.find("{")
+            end_idx = response.rfind("}") + 1
             if start_idx != -1 and end_idx != 0:
                 json_str = response[start_idx:end_idx]
                 return json.loads(json_str)
@@ -190,22 +205,24 @@ class ComplianceEvaluator(BaseEvaluator):
         score = 0.0
 
         has_any_headings = any(
-            line.strip().startswith(("#", "##", "###"))
-            for line in report.split("\n")
+            line.strip().startswith(("#", "##", "###")) for line in report.split("\n")
         )
         if has_any_headings:
             score += 0.1
 
         has_any_lists = any(
-            "- " in line or "* " in line or "1." in line
-            for line in report.split("\n")
+            "- " in line or "* " in line or "1." in line for line in report.split("\n")
         )
         if has_any_lists:
             score += 0.1
 
         required_sections = [
-            "执行摘要", "决策总结", "参考文献",
-            "executive summary", "decision", "reference"
+            "执行摘要",
+            "决策总结",
+            "参考文献",
+            "executive summary",
+            "decision",
+            "reference",
         ]
         heading_texts = [
             line.strip().lstrip("#").strip().lower()
@@ -213,7 +230,8 @@ class ComplianceEvaluator(BaseEvaluator):
             if line.strip().startswith("#")
         ]
         sections_found = sum(
-            1 for section in required_sections
+            1
+            for section in required_sections
             if any(section in heading for heading in heading_texts)
         )
         score += min(sections_found * 0.1, 0.3)
@@ -232,11 +250,11 @@ class ComplianceEvaluator(BaseEvaluator):
         if report_len >= 3000:
             score += 0.05
 
-        if re.search(r'^# ', report, re.MULTILINE):
+        if re.search(r"^# ", report, re.MULTILINE):
             score += 0.05
-        if re.search(r'^## ', report, re.MULTILINE):
+        if re.search(r"^## ", report, re.MULTILINE):
             score += 0.05
-        if re.search(r'^### ', report, re.MULTILINE):
+        if re.search(r"^### ", report, re.MULTILINE):
             score += 0.05
 
         return min(score, 1.0)
@@ -247,16 +265,13 @@ class ComplianceEvaluator(BaseEvaluator):
 
         score = 0.0
 
-        if re.search(r'https?://\S+', report):
+        if re.search(r"https?://\S+", report):
             score += 0.3
 
-        if re.search(r'\[\d+\]', report):
+        if re.search(r"\[\d+\]", report):
             score += 0.2
 
-        attribution_keywords = [
-            "来源", "引用", "参考", "出处",
-            "source", "reference", "citation"
-        ]
+        attribution_keywords = ["来源", "引用", "参考", "出处", "source", "reference", "citation"]
         if any(kw in report.lower() for kw in attribution_keywords):
             score += 0.2
 
@@ -271,11 +286,10 @@ class ComplianceEvaluator(BaseEvaluator):
 
         return min(score, 1.0)
 
-    def _has_markdown_table(self, report: str) -> Tuple[bool, bool]:
+    def _has_markdown_table(self, report: str) -> tuple[bool, bool]:
         lines = report.split("\n")
         has_table_rows = any(line.count("|") >= 3 for line in lines)
         has_table_separator = any(
-            "|" in line and bool(re.match(r'^[\s|:\-]+$', line.strip()))
-            for line in lines
+            "|" in line and bool(re.match(r"^[\s|:\-]+$", line.strip())) for line in lines
         )
         return (has_table_rows, has_table_separator)

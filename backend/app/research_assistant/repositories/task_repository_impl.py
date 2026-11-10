@@ -1,10 +1,8 @@
-from typing import List, Optional
 from app.infrastructure.db.models import TaskModel
 from app.infrastructure.db.repositories.base_task_repository import BaseTaskRepository
-from app.research_assistant.repositories import TaskRepository
-from app.research_assistant.models.models import Task
 from app.research_assistant.models.enums import TaskStatus
-from harness.logger import logger
+from app.research_assistant.models.models import Task
+from app.research_assistant.repositories import TaskRepository
 
 
 class ResearchAssistantTaskRepositoryImpl(BaseTaskRepository, TaskRepository):
@@ -23,7 +21,7 @@ class ResearchAssistantTaskRepositoryImpl(BaseTaskRepository, TaskRepository):
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
-            completed_at=model.completed_at
+            completed_at=model.completed_at,
         )
 
     def _to_persistence_model(self, task: Task) -> TaskModel:
@@ -41,5 +39,5 @@ class ResearchAssistantTaskRepositoryImpl(BaseTaskRepository, TaskRepository):
             created_at=task.created_at,
             updated_at=task.updated_at,
             started_at=task.started_at,
-            completed_at=task.completed_at
+            completed_at=task.completed_at,
         )

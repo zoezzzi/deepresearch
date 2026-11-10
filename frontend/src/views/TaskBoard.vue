@@ -13,7 +13,8 @@
     </div>
 
     <div v-if="error" class="error-alert">
-      {{ error }}
+      <span>{{ error }}</span>
+      <button type="button" class="retry-button" @click="reload">重试</button>
     </div>
 
     <div v-if="isLoading && !workflow" class="loading-container">
@@ -29,11 +30,7 @@
           <p>正在生成调研计划...</p>
         </div>
         <div v-else class="tasks-list">
-          <TaskCard
-            v-for="task in tasks"
-            :key="task.taskId"
-            :task="task"
-          />
+          <TaskCard v-for="task in tasks" :key="task.taskId" :task="task" />
         </div>
       </div>
 
@@ -79,7 +76,12 @@ const isLoading = computed(() => researchStore.isLoading)
 const error = computed(() => researchStore.error)
 
 const renderedMarkdown = computed(() => {
-  return marked(reportContent.value || '')
+  try {
+    return marked(reportContent.value || '') as string
+  } catch (err) {
+    console.error('[TaskBoard] 报告渲染失败:', err)
+    return '<p>报告渲染失败，请稍后重试或下载原文查看</p>'
+  }
 })
 
 const statusClass = computed(() => {
@@ -109,17 +111,35 @@ const canViewFullReport = computed(() => {
   return displayStatus === 'completed'
 })
 
-onMounted(async () => {
-  if (workflowId) {
+async function loadWorkflow() {
+  if (!workflowId) return
+
+  try {
     if (!researchStore.currentWorkflow || researchStore.currentWorkflow.workflowId !== workflowId) {
       await researchStore.fetchWorkflow(workflowId)
-      researchStore.connectSSE(workflowId)
-    } else if (researchStore.currentWorkflow.reportUrl && !researchStore.reportContent) {
+    }
+
+    // 无论快照是否已在 store 中，都要确保 SSE/轮询通道开启，
+    // 否则从其他页面返回时任务列表会停留在离开前的旧状态
+    researchStore.connectSSE(workflowId)
+
+    if (researchStore.currentWorkflow?.reportUrl && !researchStore.reportContent) {
       // 如果工作流已加载，有报告 URL 但没有报告内容，加载报告内容
       await researchStore.fetchReportContent(workflowId)
     }
+  } catch (err) {
+    // store 已写入可展示的错误信息，这里只避免未处理的 Promise 拒绝
+    console.error('[TaskBoard] 加载工作流失败:', err)
   }
-})
+}
+
+/** 重试：断开可能已失效的实时通道后重新拉取快照 */
+function reload() {
+  researchStore.disconnectSSE()
+  loadWorkflow()
+}
+
+onMounted(loadWorkflow)
 
 onUnmounted(() => {
   researchStore.disconnectSSE()
@@ -190,6 +210,26 @@ onUnmounted(() => {
   border: 1px solid #fc8181;
   border-radius: 8px;
   color: #c53030;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.retry-button {
+  padding: 0.4rem 1rem;
+  border: 1px solid #c53030;
+  border-radius: 6px;
+  background: white;
+  color: #c53030;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.retry-button:hover {
+  background: #fff5f5;
 }
 
 .loading-container {

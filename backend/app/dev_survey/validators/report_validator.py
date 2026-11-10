@@ -1,6 +1,3 @@
-from typing import List, Tuple
-
-
 class ReportValidator:
     REQUIRED_SECTIONS = [
         ("执行摘要", ["executive summary", "摘要", "概述"]),
@@ -8,7 +5,7 @@ class ReportValidator:
         ("参考文献", ["reference", "参考", "引用", "来源"]),
     ]
 
-    def validate(self, report: str) -> Tuple[bool, List[str]]:
+    def validate(self, report: str) -> tuple[bool, list[str]]:
         if not report:
             return False, ["报告为空"]
 
@@ -21,14 +18,14 @@ class ReportValidator:
 
         return len(missing) == 0, missing
 
-    def _extract_headings(self, report: str) -> List[str]:
+    def _extract_headings(self, report: str) -> list[str]:
         return [
-            line.strip().lstrip('#').strip()
-            for line in report.split('\n')
-            if line.strip().startswith('#')
+            line.strip().lstrip("#").strip()
+            for line in report.split("\n")
+            if line.strip().startswith("#")
         ]
 
-    def _has_section(self, headings: List[str], section_name: str, aliases: List[str]) -> bool:
+    def _has_section(self, headings: list[str], section_name: str, aliases: list[str]) -> bool:
         all_names = [section_name] + aliases
         for heading in headings:
             heading_lower = heading.lower()

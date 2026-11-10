@@ -1,7 +1,7 @@
 import asyncio
-from typing import List
-from harness.agents.base import Agent
+
 from app.research_assistant.models.models import Task
+from harness.agents.base import Agent
 from harness.logger import logger
 
 
@@ -10,7 +10,7 @@ class GenerateAgent(Agent):
         super().__init__("GenerateAgent")
         self.llm_client = llm_client
 
-    async def execute(self, topic: str, tasks: List[Task]) -> str:
+    async def execute(self, topic: str, tasks: list[Task]) -> str:
         logger.info(f"[{self.name}] Generating research report for topic: {topic}")
 
         try:
@@ -22,13 +22,18 @@ class GenerateAgent(Agent):
 
             for attempt in range(max_attempts):
                 try:
-                    logger.info(f"[{self.name}] Attempt {attempt + 1}/{max_attempts} to generate report")
+                    logger.info(
+                        f"[{self.name}] Attempt {attempt + 1}/{max_attempts} to generate report"
+                    )
                     response = await self.llm_client.chat(
                         messages=[
-                            {"role": "system", "content": "You are a research report generation expert. Create comprehensive, well-structured research reports in Markdown format."},
-                            {"role": "user", "content": prompt}
+                            {
+                                "role": "system",
+                                "content": "You are a research report generation expert. Create comprehensive, well-structured research reports in Markdown format.",
+                            },
+                            {"role": "user", "content": prompt},
                         ],
-                        timeout=600  # 10 分钟超时，报告生成需要更多时间
+                        timeout=600,  # 10 分钟超时，报告生成需要更多时间
                     )
 
                     logger.info(f"[{self.name}] Successfully generated research report")
@@ -40,17 +45,21 @@ class GenerateAgent(Agent):
                         await asyncio.sleep(5)  # 短暂延迟后重试
                     else:
                         # 最后一次失败，尝试生成简化报告
-                        logger.warning(f"[{self.name}] All attempts failed, trying simplified report")
+                        logger.warning(
+                            f"[{self.name}] All attempts failed, trying simplified report"
+                        )
                         return await self._generate_simplified_report(topic, tasks)
 
             logger.error(f"[{self.name}] All {max_attempts} attempts failed: {str(last_error)}")
-            raise Exception(f"Report generation failed after {max_attempts} attempts: {str(last_error)}")
+            raise Exception(
+                f"Report generation failed after {max_attempts} attempts: {str(last_error)}"
+            )
 
         except Exception as e:
             logger.error(f"[{self.name}] Report generation failed: {str(e)}")
             raise
 
-    async def _generate_simplified_report(self, topic: str, tasks: List[Task]) -> str:
+    async def _generate_simplified_report(self, topic: str, tasks: list[Task]) -> str:
         """生成简化版本的报告（降级策略）"""
         logger.info(f"[{self.name}] Generating simplified report for topic: {topic}")
 
@@ -68,16 +77,20 @@ class GenerateAgent(Agent):
                     report_parts.append("")
 
             report_parts.append("---")
-            report_parts.append("*Note: This is a simplified version due to report generation timeout.*")
+            report_parts.append(
+                "*Note: This is a simplified version due to report generation timeout.*"
+            )
 
             return "\n".join(report_parts)
         except Exception as e:
             logger.error(f"[{self.name}] Simplified report generation also failed: {str(e)}")
             # 返回最基本的报告
-            completed_count = len([t for t in tasks if hasattr(t, "status") and t.status == "completed"])
+            completed_count = len(
+                [t for t in tasks if hasattr(t, "status") and t.status == "completed"]
+            )
             return f"# {topic}\n\nReport generation failed. {completed_count} tasks completed successfully."
 
-    def _build_prompt(self, topic: str, tasks: List[Task]) -> str:
+    def _build_prompt(self, topic: str, tasks: list[Task]) -> str:
         task_summaries = []
         for task in sorted(tasks, key=lambda t: t.order):
             intent = task.intent or "No intent"

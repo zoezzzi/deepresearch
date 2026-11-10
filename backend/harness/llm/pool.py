@@ -3,11 +3,12 @@ LLM 客户端连接池
 
 用于管理 LLM 客户端实例，减少重复创建的开销
 """
+
 import asyncio
-from typing import Dict, Any, Optional, Tuple
+
 from harness.config import get_harness_settings
-from harness.logger import logger
 from harness.llm.langchain_client import LangChainClient
+from harness.logger import logger
 
 settings = get_harness_settings()
 
@@ -18,16 +19,14 @@ class LLMClientPool:
 
     管理不同配置的 LLM 客户端实例，避免重复创建
     """
-    
+
     def __init__(self):
-        self._pool: Dict[Tuple[str, float], LangChainClient] = {}
+        self._pool: dict[tuple[str, float], LangChainClient] = {}
         self._lock = asyncio.Lock()
         logger.info("[LLMClientPool] 初始化 LLM 客户端连接池")
-    
+
     async def get_client(
-        self,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None
+        self, model: str | None = None, temperature: float | None = None
     ) -> LangChainClient:
         """
         获取或创建 LLM 客户端
@@ -43,24 +42,28 @@ class LLMClientPool:
             model = settings.LLM_MODEL_ID
         if temperature is None:
             temperature = settings.LLM_TEMPERATURE
-        
+
         key = (model, temperature)
-        
+
         async with self._lock:
             if key not in self._pool:
-                logger.debug(f"[LLMClientPool] 创建新的 LLM 客户端: model={model}, temperature={temperature}")
+                logger.debug(
+                    f"[LLMClientPool] 创建新的 LLM 客户端: model={model}, temperature={temperature}"
+                )
                 client = LangChainClient()
                 self._pool[key] = client
             else:
-                logger.debug(f"[LLMClientPool] 复用已有的 LLM 客户端: model={model}, temperature={temperature}")
-            
+                logger.debug(
+                    f"[LLMClientPool] 复用已有的 LLM 客户端: model={model}, temperature={temperature}"
+                )
+
             return self._pool[key]
-    
+
     def clear(self):
         """清空连接池"""
         self._pool.clear()
         logger.info("[LLMClientPool] 连接池已清空")
-    
+
     @property
     def size(self) -> int:
         """当前连接池大小"""
@@ -68,7 +71,7 @@ class LLMClientPool:
 
 
 # 全局单例
-_pool_instance: Optional[LLMClientPool] = None
+_pool_instance: LLMClientPool | None = None
 
 
 def get_llm_client_pool() -> LLMClientPool:

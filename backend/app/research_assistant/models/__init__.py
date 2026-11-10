@@ -1,16 +1,16 @@
-from app.research_assistant.models.enums import WorkflowStatus, TaskStatus, EvaluationStatus
-from app.research_assistant.models.models import (
-    Task,
-    Workflow,
-    ResearchReport,
-    EvaluationResult,
-    InvalidWorkflowStateError
-)
 from app.research_assistant.models.dtos import (
     CreateResearchRequest,
+    ResearchResponse,
     TaskResponse,
     WorkflowResponse,
-    ResearchResponse
+)
+from app.research_assistant.models.enums import EvaluationStatus, TaskStatus, WorkflowStatus
+from app.research_assistant.models.models import (
+    EvaluationResult,
+    InvalidWorkflowStateError,
+    ResearchReport,
+    Task,
+    Workflow,
 )
 
 __all__ = [
@@ -25,5 +25,5 @@ __all__ = [
     "CreateResearchRequest",
     "TaskResponse",
     "WorkflowResponse",
-    "ResearchResponse"
+    "ResearchResponse",
 ]

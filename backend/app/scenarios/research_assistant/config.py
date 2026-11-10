@@ -11,5 +11,5 @@ SCENARIO_UI_CONFIG = {
     "navbar_title": "研究助手",
     "form_title": "开始新的调研",
     "topic_label": "调研主题 *",
-    "topic_placeholder": "例如：人工智能在医疗领域的应用"
+    "topic_placeholder": "例如：人工智能在医疗领域的应用",
 }

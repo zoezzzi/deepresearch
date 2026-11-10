@@ -1,7 +1,7 @@
-from typing import List
 import uuid
+
 from app.dev_survey.agents import GenerateAgent
-from app.dev_survey.models.models import Task, ResearchReport
+from app.dev_survey.models.models import ResearchReport, Task
 from harness.logger import logger
 
 
@@ -10,10 +10,7 @@ class ReportGenerationService:
         self.generate_agent = generate_agent
 
     async def generate_report(
-        self,
-        workflow_id: str,
-        topic: str,
-        tasks: List[Task]
+        self, workflow_id: str, topic: str, tasks: list[Task]
     ) -> ResearchReport:
         logger.info(f"[ReportGenerationService] Generating report for workflow: {workflow_id}")
 
@@ -24,10 +21,7 @@ class ReportGenerationService:
             report_url = f"/reports/{report_id}"
 
             report = ResearchReport(
-                report_id=report_id,
-                workflow_id=workflow_id,
-                content=report_content,
-                url=report_url
+                report_id=report_id, workflow_id=workflow_id, content=report_content, url=report_url
             )
 
             logger.info(f"[ReportGenerationService] Report generated successfully: {report_id}")

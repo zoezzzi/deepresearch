@@ -1,12 +1,11 @@
 from dataclasses import dataclass
-from typing import List, Optional, Any
 from datetime import datetime
 
 
 @dataclass
 class PlanEvent:
     workflow_id: str
-    tasks: List[dict]
+    tasks: list[dict]
     timestamp: datetime
     event_type: str = "plan"
 

@@ -1,8 +1,8 @@
 import asyncio
-from typing import List
+
 from harness.agents.base import Agent
-from harness.source_routing.sources.factory import get_search_source, get_sources_by_priority
 from harness.logger import logger
+from harness.source_routing.sources.factory import get_search_source, get_sources_by_priority
 
 INTENT_SOURCE_MAP = {
     "对比": ["github", "tavily"],
@@ -31,7 +31,7 @@ class SearchAgent(Agent):
             except Exception as e:
                 logger.warning(f"[{self.name}] Failed to register search source {source_name}: {e}")
 
-    async def execute(self, query: str, intent: str = "") -> List:
+    async def execute(self, query: str, intent: str = "") -> list:
         logger.info(f"[{self.name}] Searching for: {query}, intent: {intent}")
 
         selected_sources = self._select_sources(intent)
@@ -48,14 +48,12 @@ class SearchAgent(Agent):
                     logger.info(f"[{self.name}] Got {len(results)} results from {source_name}")
                     return results
                 except Exception as e:
-                    logger.warning(f"[{self.name}] Search failed with {src.__class__.__name__}: {str(e)}")
+                    logger.warning(
+                        f"[{self.name}] Search failed with {src.__class__.__name__}: {str(e)}"
+                    )
                     return []
 
-        coroutines = [
-            search_one(q, src)
-            for q in queries
-            for src in selected_sources
-        ]
+        coroutines = [search_one(q, src) for q in queries for src in selected_sources]
 
         results_per_pair = await asyncio.gather(*coroutines, return_exceptions=True)
 
@@ -86,12 +84,13 @@ class SearchAgent(Agent):
             return self.sources
 
         selected = [
-            s for s in self.sources
+            s
+            for s in self.sources
             if s.__class__.__name__.replace("SearchSource", "").lower() in preferred_names
         ]
         return selected if selected else self.sources
 
-    def _generate_search_queries(self, query: str, intent: str) -> List[str]:
+    def _generate_search_queries(self, query: str, intent: str) -> list[str]:
         queries = [query]
 
         if any(kw in intent for kw in ["对比", "vs", "选型"]):

@@ -1,16 +1,18 @@
-from typing import AsyncGenerator, List, Dict, Any, Optional
-import os
 import asyncio
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+import os
+from collections.abc import AsyncGenerator
+from typing import Any
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import RunnableConfig
-from tenacity import stop_after_attempt, wait_exponential, retry_base, RetryError
-from tenacity.asyncio import AsyncRetrying
-from harness.llm.base import LLMClient
+from langchain_openai import ChatOpenAI
+from tenacity import RetryError
+
 from harness.config import get_harness_settings
+from harness.llm.base import LLMClient
 from harness.logger import logger
-from harness.observability.trace_context import trace_id_var, workflow_id_var, span_id_var
+from harness.observability.trace_context import span_id_var, trace_id_var, workflow_id_var
 
 settings = get_harness_settings()
 
@@ -21,7 +23,9 @@ def _init_langsmith():
         os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGCHAIN_ENDPOINT
         os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
         os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
-        logger.info(f"[LangChainClient] LangSmith tracing enabled for project: {settings.LANGCHAIN_PROJECT}")
+        logger.info(
+            f"[LangChainClient] LangSmith tracing enabled for project: {settings.LANGCHAIN_PROJECT}"
+        )
     else:
         logger.debug("[LangChainClient] LangSmith tracing disabled")
 
@@ -30,6 +34,14 @@ _init_langsmith()
 
 
 class LangChainClient(LLMClient):
+    """LLM client backed by ``langchain_openai.ChatOpenAI``.
+
+    Lazily creates and reuses one ``ChatOpenAI`` instance. When the requested
+    model or temperature changes it rebuilds the instance and closes the old
+    connection pool. All methods share one async lock; after ``close`` the
+    instance is no longer usable.
+    """
+
     def __init__(self):
         self.api_key = settings.LLM_API_KEY
         self.base_url = settings.LLM_BASE_URL
@@ -37,58 +49,66 @@ class LangChainClient(LLMClient):
         self.temperature = settings.LLM_TEMPERATURE
         self.timeout = settings.LLM_TIMEOUT
         self.max_retries = settings.LLM_MAX_RETRIES
-        
-        if not self.api_key and hasattr(settings, 'QWEN_API_KEY'):
+
+        if not self.api_key and hasattr(settings, "QWEN_API_KEY"):
             self.api_key = settings.QWEN_API_KEY
             self.base_url = settings.QWEN_BASE_URL
-        
+
         self._client = None
         self._closed = False
         self._client_lock = asyncio.Lock()
         self._client_params = {
-            'model': self.model,
-            'api_key': self.api_key,
-            'base_url': self.base_url,
-            'temperature': self.temperature,
-            'timeout': self.timeout
+            "model": self.model,
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+            "temperature": self.temperature,
+            "timeout": self.timeout,
         }
-        
+
         logger.debug(f"LangChainClient initialized with model: {self.model}")
-    
+
     async def _get_client(self, **override_params) -> ChatOpenAI:
+        """Return a ChatOpenAI instance matching the effective parameters.
+
+        The client is rebuilt only when model or temperature changes; other
+        overrides are passed through at construction time.
+        """
         if self._closed:
             raise RuntimeError("[LangChainClient] Client has been closed")
         current_params = {**self._client_params, **override_params}
-        
+
         async with self._client_lock:
-            if (self._client is None or 
-                current_params.get('model') != self._client_params.get('model') or
-                current_params.get('temperature') != self._client_params.get('temperature')):
-                
+            if (
+                self._client is None
+                or current_params.get("model") != self._client_params.get("model")
+                or current_params.get("temperature") != self._client_params.get("temperature")
+            ):
                 old_client = self._client
                 self._client = ChatOpenAI(
-                    model=current_params['model'],
-                    api_key=current_params['api_key'],
-                    base_url=current_params['base_url'],
-                    temperature=current_params['temperature'],
-                    timeout=current_params['timeout']
+                    model=current_params["model"],
+                    api_key=current_params["api_key"],
+                    base_url=current_params["base_url"],
+                    temperature=current_params["temperature"],
+                    timeout=current_params["timeout"],
                 )
-                logger.debug(f"[LangChainClient] Created new client instance with model: {current_params['model']}")
-                
+                logger.debug(
+                    f"[LangChainClient] Created new client instance with model: {current_params['model']}"
+                )
+
                 if old_client is not None:
                     await self._close_chatopenai(old_client)
-            
+
             return self._client
-    
+
     @staticmethod
     async def _close_chatopenai(client: ChatOpenAI) -> None:
         """关闭 ChatOpenAI 底层的 httpx.AsyncClient 连接池。"""
         try:
-            async_client = getattr(client, 'async_client', None)
+            async_client = getattr(client, "async_client", None)
             if async_client is not None:
-                if hasattr(async_client, 'aclose'):
+                if hasattr(async_client, "aclose"):
                     await async_client.aclose()
-                elif hasattr(async_client, 'close'):
+                elif hasattr(async_client, "close"):
                     result = async_client.close()
                     if asyncio.iscoroutine(result):
                         await result
@@ -96,6 +116,7 @@ class LangChainClient(LLMClient):
             logger.warning(f"[LangChainClient] Error closing underlying client: {e}")
 
     async def close(self):
+        """Release the underlying HTTP connection pool and mark the client unusable."""
         if self._closed:
             return
         self._closed = True
@@ -104,7 +125,12 @@ class LangChainClient(LLMClient):
         self._client = None
         logger.debug("[LangChainClient] Closed, underlying resources released")
 
-    def _convert_messages(self, messages: List[Dict[str, str]]) -> List[BaseMessage]:
+    def _convert_messages(self, messages: list[dict[str, str]]) -> list[BaseMessage]:
+        """Map OpenAI-style role dicts to LangChain message objects.
+
+        Unknown roles are dropped silently; callers are expected to only pass
+        system/user/assistant messages.
+        """
         langchain_messages = []
         for msg in messages:
             role = msg.get("role")
@@ -116,157 +142,189 @@ class LangChainClient(LLMClient):
             elif role == "assistant":
                 langchain_messages.append(AIMessage(content=content))
         return langchain_messages
-    
+
     def _is_retryable_error(self, error: Exception) -> bool:
+        """Classify an error as transient (retry) or permanent (abort).
+
+        4xx-class errors (auth, bad parameters, unknown model) can never succeed
+        on retry, so they are classified as non-retryable.
+        """
         error_str = str(error).lower()
-        
+
         if isinstance(error, (ConnectionError, TimeoutError)):
             return True
-        
-        if '429' in error_str:
+
+        if "429" in error_str:
             return True
-        if '500' in error_str or '502' in error_str or '503' in error_str:
+        if "500" in error_str or "502" in error_str or "503" in error_str:
             return True
-        if '504' in error_str:
+        if "504" in error_str:
             return True
-        
-        if 'null' in error_str and 'choices' in error_str:
+
+        if "null" in error_str and "choices" in error_str:
             return True
-        if 'empty response' in error_str:
+        if "empty response" in error_str:
             return True
-        
-        if '401' in error_str or '403' in error_str:
+
+        if "401" in error_str or "403" in error_str:
             return False
-        if '400' in error_str:
+        if "400" in error_str:
             return False
-        if '404' in error_str:
+        if "404" in error_str:
             return False
-        
+
         return False
-    
-    async def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
+
+    async def chat(self, messages: list[dict[str, str]], **kwargs) -> str:
+        """Send a chat completion request and return the text content.
+
+        Retries transient failures with exponential backoff up to ``max_retries``.
+        Raises ``RetryError`` if all attempts fail, and re-raises immediately for
+        non-retryable errors.
+        """
         model = kwargs.get("model", self.model)
         temperature = kwargs.get("temperature", self.temperature)
         timeout = kwargs.get("timeout", self.timeout)
-        
+
         logger.info(f"[LangChainClient] Calling chat with model: {model}, timeout: {timeout}s")
-        
+
         langchain_messages = self._convert_messages(messages)
-        
+
         max_attempts = self.max_retries
         last_error = None
-        
+
         for attempt in range(max_attempts):
             try:
-                client = await self._get_client(model=model, temperature=temperature, timeout=timeout)
-                
+                client = await self._get_client(
+                    model=model, temperature=temperature, timeout=timeout
+                )
+
                 config = RunnableConfig(
                     metadata={
                         "trace_id": trace_id_var.get(),
                         "workflow_id": workflow_id_var.get(),
                         "span_id": span_id_var.get(),
                     },
-                    tags=["deepresearch"]
+                    tags=["deepresearch"],
                 )
-                
+
                 response = await client.ainvoke(langchain_messages, config=config)
-                
+
                 result = self._parse_response(response)
                 if result:
-                    logger.info(f"[LangChainClient] Chat completed successfully")
+                    logger.info("[LangChainClient] Chat completed successfully")
                     return result
                 else:
-                    logger.warning(f"[LangChainClient] Empty or invalid response, will retry")
+                    logger.warning("[LangChainClient] Empty or invalid response, will retry")
                     last_error = ValueError("Empty or invalid response from LLM API")
-                    
+
             except Exception as e:
                 last_error = e
-                logger.warning(f"[LangChainClient] Attempt {attempt + 1}/{max_attempts} failed: {str(e)}")
-                
+                logger.warning(
+                    f"[LangChainClient] Attempt {attempt + 1}/{max_attempts} failed: {str(e)}"
+                )
+
                 if not self._is_retryable_error(e):
                     logger.error(f"[LangChainClient] Non-retryable error, aborting: {str(e)}")
                     raise
-            
+
             if attempt < max_attempts - 1:
-                delay = min(2 ** attempt, 10)
+                delay = min(2**attempt, 10)
                 logger.warning(f"[LangChainClient] Retrying in {delay:.1f}s...")
                 await asyncio.sleep(delay)
             else:
                 break
-        
+
         logger.error(f"[LangChainClient] All retry attempts failed: {str(last_error)}")
         raise RetryError(last_error)
-    
-    def _parse_response(self, response: Any) -> Optional[str]:
+
+    def _parse_response(self, response: Any) -> str | None:
+        """Extract plain text from the various shapes LangChain may return.
+
+        Returns None instead of raising so the caller can decide to retry.
+        """
         try:
             if response is None:
                 logger.warning("[LangChainClient] Response is None")
                 return None
-            
+
             if isinstance(response, ChatResult):
                 if not response.generations:
                     logger.warning("[LangChainClient] No generations in response")
                     return None
-                
+
                 generation = response.generations[0]
                 if not generation or not generation.text:
                     logger.warning("[LangChainClient] Empty generation text")
                     return None
-                
+
                 return generation.text
-            
-            if hasattr(response, 'content'):
+
+            if hasattr(response, "content"):
                 content = response.content
                 if content:
                     return content
                 else:
                     logger.warning("[LangChainClient] Response content is empty")
                     return None
-            
+
             if isinstance(response, str):
                 return response
-            
+
             logger.warning(f"[LangChainClient] Unknown response type: {type(response)}")
             return str(response) if response else None
-            
+
         except Exception as e:
             logger.error(f"[LangChainClient] Error parsing response: {str(e)}")
             return None
-    
-    async def chat_stream(self, messages: List[Dict[str, str]], **kwargs) -> AsyncGenerator[str, None]:
+
+    async def chat_stream(
+        self, messages: list[dict[str, str]], **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """Yield content chunks as they arrive.
+
+        Retry the whole stream only on connection-class errors; once a chunk has
+        been yielded to the caller, a retry is skipped to avoid duplicate content.
+        """
         model = kwargs.get("model", self.model)
         temperature = kwargs.get("temperature", self.temperature)
         timeout = kwargs.get("timeout", self.timeout)
-        
+
         logger.info(f"[LangChainClient] Calling chat stream with model: {model}")
-        
+
         langchain_messages = self._convert_messages(messages)
-        
+
         max_attempts = self.max_retries
         for attempt in range(max_attempts):
             try:
-                client = await self._get_client(model=model, temperature=temperature, timeout=timeout)
-                
+                client = await self._get_client(
+                    model=model, temperature=temperature, timeout=timeout
+                )
+
                 chunk_count = 0
                 async for chunk in client.astream(langchain_messages):
-                    if chunk and hasattr(chunk, 'content') and chunk.content:
+                    if chunk and hasattr(chunk, "content") and chunk.content:
                         chunk_count += 1
                         yield chunk.content
-                
+
                 if chunk_count == 0:
                     logger.warning("[LangChainClient] No chunks received in stream")
                 else:
                     logger.info(f"[LangChainClient] Stream completed with {chunk_count} chunks")
-                
+
                 return
-                
+
             except (ConnectionError, TimeoutError) as e:
                 if attempt < max_attempts - 1:
-                    logger.warning(f"[LangChainClient] Stream connection failed, retrying: {str(e)}")
-                    delay = min(2 ** attempt, 10)
+                    logger.warning(
+                        f"[LangChainClient] Stream connection failed, retrying: {str(e)}"
+                    )
+                    delay = min(2**attempt, 10)
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"[LangChainClient] Stream failed after {max_attempts} attempts: {str(e)}")
+                    logger.error(
+                        f"[LangChainClient] Stream failed after {max_attempts} attempts: {str(e)}"
+                    )
                     raise
             except Exception as e:
                 logger.error(f"[LangChainClient] Stream error: {str(e)}")

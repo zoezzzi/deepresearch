@@ -1,41 +1,37 @@
-import uuid
 import asyncio
-from datetime import datetime
-from pathlib import Path
-from typing import Optional, Union, Dict, Any
-from uuid import UUID
 import hashlib
+import uuid
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
 from fastapi import HTTPException
 from sqlalchemy import text
 
-from app.infrastructure.db.session import SessionLocal
-
+from app.common.utils.time_utils import get_current_utc_time
+from app.dev_survey.agents import GenerateAgent, PlanAgent, SearchAgent, SummarizerAgent
+from app.dev_survey.agents.critic_agent import CriticAgent
+from app.dev_survey.events import get_event_publisher
 from app.dev_survey.models.dtos import (
     CreateResearchRequest,
-    WorkflowResponse,
+    ResearchResponse,
     TaskResponse,
-    ResearchResponse
+    WorkflowResponse,
 )
-from app.dev_survey.models.models import Workflow
 from app.dev_survey.models.enums import WorkflowStatus
-from app.dev_survey.events import get_event_publisher
-from app.dev_survey.services import (
-    ResearchPlanService,
-    TaskExecutionService,
-    ReportGenerationService,
-    EvaluationService
-)
-from app.dev_survey.repositories import WorkflowRepository, TaskRepository
-from app.dev_survey.agents import PlanAgent, SearchAgent, SummarizerAgent, GenerateAgent
-from app.dev_survey.agents.critic_agent import CriticAgent
-from harness.llm.factory import get_llm_client, remove_llm_client
-from harness.source_routing.sources.factory import get_search_source
-from harness.storage.local_storage import LocalObjectStorage
-from harness.evaluation.orchestrator import EvaluationOrchestrator
+from app.dev_survey.models.models import Workflow
+from app.dev_survey.repositories import TaskRepository, WorkflowRepository
+from app.dev_survey.services.evaluation_service import EvaluationService
+from app.dev_survey.services.report_generation_service import ReportGenerationService
+from app.dev_survey.services.research_plan_service import ResearchPlanService
+from app.dev_survey.services.task_execution_service import TaskExecutionService
 from harness.config import get_harness_settings
+from harness.db.session import SessionLocal
+from harness.evaluation.orchestrator import EvaluationOrchestrator
+from harness.llm.factory import get_llm_client, remove_llm_client
 from harness.logger import logger
-from harness.observability.trace_service import get_trace_service, TraceService
-from app.common.utils.time_utils import get_current_utc_time
+from harness.observability.trace_service import TraceService
+from harness.storage.local_storage import LocalObjectStorage
 from harness.workflow.saver import CheckpointConnectionError
 
 settings = get_harness_settings()
@@ -70,6 +66,7 @@ class ResearchService:
         object_storage_factory: callable = None,
         trace_service_factory: callable = None,
     ):
+        """Bind repositories and factories only; heavy components are built on first use."""
         self.workflow_repository = workflow_repository
         self.task_repository = task_repository
         self.evaluation_service = evaluation_service
@@ -78,14 +75,22 @@ class ResearchService:
 
         self._plan_agent_factory = plan_agent_factory or (lambda: PlanAgent(get_llm_client()))
         self._search_agent_factory = search_agent_factory or (lambda: SearchAgent())
-        self._summarizer_agent_factory = summarizer_agent_factory or (lambda: SummarizerAgent(get_llm_client()))
-        self._generate_agent_factory = generate_agent_factory or (lambda: GenerateAgent(get_llm_client()))
+        self._summarizer_agent_factory = summarizer_agent_factory or (
+            lambda: SummarizerAgent(get_llm_client())
+        )
+        self._generate_agent_factory = generate_agent_factory or (
+            lambda: GenerateAgent(get_llm_client())
+        )
         self._critic_agent_factory = critic_agent_factory or (lambda: CriticAgent(get_llm_client()))
         self._event_publisher_factory = event_publisher_factory or (lambda: get_event_publisher())
-        self._object_storage_factory = object_storage_factory or (lambda: LocalObjectStorage(url_prefix=report_url_prefix))
+        self._object_storage_factory = object_storage_factory or (
+            lambda: LocalObjectStorage(url_prefix=report_url_prefix)
+        )
+
         def _default_trace_service_factory():
             # 延迟导入避免循环依赖；app 层负责注入 TraceRepositoryImpl
             from app.service_factory import create_trace_service
+
             return create_trace_service()
 
         self._trace_service_factory = trace_service_factory or _default_trace_service_factory
@@ -113,9 +118,13 @@ class ResearchService:
                 instance = self._plan_agent_factory()
             except Exception as e:
                 logger.error(f"[ResearchService] Failed to create PlanAgent: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize PlanAgent via factory. Underlying error: {e}") from e
+                raise RuntimeError(
+                    f"Failed to initialize PlanAgent via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("PlanAgent factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "PlanAgent factory returned None. This indicates a programming error."
+                )
             self._plan_agent = instance
         return self._plan_agent
 
@@ -126,9 +135,13 @@ class ResearchService:
                 instance = self._search_agent_factory()
             except Exception as e:
                 logger.error(f"[ResearchService] Failed to create SearchAgent: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize SearchAgent via factory. Underlying error: {e}") from e
+                raise RuntimeError(
+                    f"Failed to initialize SearchAgent via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("SearchAgent factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "SearchAgent factory returned None. This indicates a programming error."
+                )
             self._search_agent = instance
         return self._search_agent
 
@@ -138,10 +151,16 @@ class ResearchService:
             try:
                 instance = self._summarizer_agent_factory()
             except Exception as e:
-                logger.error(f"[ResearchService] Failed to create SummarizerAgent: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize SummarizerAgent via factory. Underlying error: {e}") from e
+                logger.error(
+                    f"[ResearchService] Failed to create SummarizerAgent: {e}", exc_info=True
+                )
+                raise RuntimeError(
+                    f"Failed to initialize SummarizerAgent via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("SummarizerAgent factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "SummarizerAgent factory returned None. This indicates a programming error."
+                )
             self._summarizer_agent = instance
         return self._summarizer_agent
 
@@ -151,10 +170,16 @@ class ResearchService:
             try:
                 instance = self._generate_agent_factory()
             except Exception as e:
-                logger.error(f"[ResearchService] Failed to create GenerateAgent: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize GenerateAgent via factory. Underlying error: {e}") from e
+                logger.error(
+                    f"[ResearchService] Failed to create GenerateAgent: {e}", exc_info=True
+                )
+                raise RuntimeError(
+                    f"Failed to initialize GenerateAgent via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("GenerateAgent factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "GenerateAgent factory returned None. This indicates a programming error."
+                )
             self._generate_agent = instance
         return self._generate_agent
 
@@ -165,9 +190,13 @@ class ResearchService:
                 instance = self._critic_agent_factory()
             except Exception as e:
                 logger.error(f"[ResearchService] Failed to create CriticAgent: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize CriticAgent via factory. Underlying error: {e}") from e
+                raise RuntimeError(
+                    f"Failed to initialize CriticAgent via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("CriticAgent factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "CriticAgent factory returned None. This indicates a programming error."
+                )
             self._critic_agent = instance
         return self._critic_agent
 
@@ -177,10 +206,16 @@ class ResearchService:
             try:
                 instance = self._event_publisher_factory()
             except Exception as e:
-                logger.error(f"[ResearchService] Failed to create EventPublisher: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize EventPublisher via factory. Underlying error: {e}") from e
+                logger.error(
+                    f"[ResearchService] Failed to create EventPublisher: {e}", exc_info=True
+                )
+                raise RuntimeError(
+                    f"Failed to initialize EventPublisher via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("EventPublisher factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "EventPublisher factory returned None. This indicates a programming error."
+                )
             self._event_publisher = instance
         return self._event_publisher
 
@@ -190,10 +225,16 @@ class ResearchService:
             try:
                 instance = self._object_storage_factory()
             except Exception as e:
-                logger.error(f"[ResearchService] Failed to create ObjectStorage: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize ObjectStorage via factory. Underlying error: {e}") from e
+                logger.error(
+                    f"[ResearchService] Failed to create ObjectStorage: {e}", exc_info=True
+                )
+                raise RuntimeError(
+                    f"Failed to initialize ObjectStorage via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("ObjectStorage factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "ObjectStorage factory returned None. This indicates a programming error."
+                )
             self._object_storage = instance
         return self._object_storage
 
@@ -204,9 +245,13 @@ class ResearchService:
                 instance = self._trace_service_factory()
             except Exception as e:
                 logger.error(f"[ResearchService] Failed to create TraceService: {e}", exc_info=True)
-                raise RuntimeError(f"Failed to initialize TraceService via factory. Underlying error: {e}") from e
+                raise RuntimeError(
+                    f"Failed to initialize TraceService via factory. Underlying error: {e}"
+                ) from e
             if instance is None:
-                raise RuntimeError("TraceService factory returned None. This indicates a programming error.")
+                raise RuntimeError(
+                    "TraceService factory returned None. This indicates a programming error."
+                )
             self._trace_service = instance
         return self._trace_service
 
@@ -214,6 +259,7 @@ class ResearchService:
         """懒加载获取工作流图；执行时必须传入 checkpointer 以保证 Checkpoint 持久化。"""
         if self._workflow_graph is None:
             from app.dev_survey.workflow import ResearchWorkflowGraphParallel
+
             self._workflow_graph = ResearchWorkflowGraphParallel(
                 research_plan_service=self.research_plan_service,
                 task_execution_service=self.task_execution_service,
@@ -239,7 +285,9 @@ class ResearchService:
     @property
     def task_execution_service(self) -> TaskExecutionService:
         if self._task_execution_service is None:
-            self._task_execution_service = TaskExecutionService(self.search_agent, self.summarizer_agent)
+            self._task_execution_service = TaskExecutionService(
+                self.search_agent, self.summarizer_agent
+            )
         return self._task_execution_service
 
     @property
@@ -252,11 +300,13 @@ class ResearchService:
     def saver_manager(self):
         if self._saver_manager is None:
             from harness.workflow import get_saver_manager
+
             self._saver_manager = get_saver_manager()
             logger.info("Using AsyncPostgresSaverManager for workflow state persistence")
         return self._saver_manager
 
     async def cleanup(self):
+        """Drop all cached lightweight instances and release the shared LLM client cache."""
         self._plan_agent = None
         self._search_agent = None
         self._summarizer_agent = None
@@ -276,6 +326,11 @@ class ResearchService:
     # --- 业务方法 ---
 
     async def create_research_workflow(self, request: CreateResearchRequest) -> WorkflowResponse:
+        """Persist a PENDING workflow and start its trace.
+
+        The DB write is best-effort: an unreachable database must not block the API,
+        because execution state is later recovered from the checkpoint.
+        """
         logger.info(f"[ResearchService] Creating research workflow for topic: {request.topic}")
 
         workflow_id = str(uuid.uuid4())
@@ -291,18 +346,25 @@ class ResearchService:
             topic=request.topic,
             scenario_id=request.scenario_id or "dev_survey",
             description=request.description,
-            status=WorkflowStatus.PENDING.value
+            status=WorkflowStatus.PENDING.value,
         )
 
         try:
             await self.workflow_repository.save(workflow)
         except Exception as db_error:
-            logger.error(f"[ResearchService] Failed to save workflow to database: {db_error}, but continuing with in-memory workflow")
+            logger.error(
+                f"[ResearchService] Failed to save workflow to database: {db_error}, but continuing with in-memory workflow"
+            )
 
         logger.info(f"[ResearchService] Workflow created: {workflow_id}, trace_id: {trace_id}")
         return self._to_workflow_response(workflow)
 
-    async def execute_research_workflow(self, workflow_id: Union[str, UUID]) -> None:
+    async def execute_research_workflow(self, workflow_id: str | UUID) -> None:
+        """Run the workflow graph end to end and persist the resulting workflow status.
+
+        Acquires a cross-process advisory lock first so duplicate submissions are
+        rejected with HTTP 409. Checkpoint connectivity failures surface as HTTP 503.
+        """
         workflow_id_str = str(workflow_id)
 
         try:
@@ -328,8 +390,8 @@ class ResearchService:
                 detail={
                     "error": "WORKFLOW_ALREADY_EXECUTING",
                     "message": "该工作流正在执行中，请勿重复提交",
-                    "workflow_id": workflow_id_str
-                }
+                    "workflow_id": workflow_id_str,
+                },
             )
 
         try:
@@ -341,9 +403,12 @@ class ResearchService:
             try:
                 await self.workflow_repository.update(workflow)
             except Exception as db_error:
-                logger.error(f"[ResearchService] Failed to update workflow to database: {db_error}, but continuing with execution")
+                logger.error(
+                    f"[ResearchService] Failed to update workflow to database: {db_error}, but continuing with execution"
+                )
 
             from app.dev_survey.workflow import WorkflowState
+
             initial_state: WorkflowState = {
                 "workflow_id": workflow_id_str,
                 "topic": workflow.topic,
@@ -356,31 +421,31 @@ class ResearchService:
                 "updated_at": get_current_utc_time(),
             }
 
-            config = {
-                "configurable": {
-                    "thread_id": workflow_id_str
-                }
-            }
+            config = {"configurable": {"thread_id": workflow_id_str}}
 
             try:
                 checkpointer = await self.saver_manager.get_saver(thread_id=workflow_id_str)
                 graph = await self.workflow_graph(checkpointer=checkpointer)
 
-                await graph.graph.ainvoke(
-                    initial_state,
-                    config=config
-                )
+                await graph.graph.ainvoke(initial_state, config=config)
 
                 final_state = await self._get_final_state(config, workflow, workflow_id_str)
                 # 仅打印关键字段，避免日志输出完整 task_results（summary/sources_summary 等大段内容）
-                _log_keys = {k: v for k, v in (final_state or {}).items()
-                             if k in ("workflow_status", "task_summary", "report_url", "error")}
+                _log_keys = {
+                    k: v
+                    for k, v in (final_state or {}).items()
+                    if k in ("workflow_status", "task_summary", "report_url", "error")
+                }
                 logger.info(f"[ResearchService] Final state summary: {_log_keys}")
 
                 await self._update_workflow_state(workflow, final_state, workflow_id_str)
                 await self._force_update_workflow_to_database(workflow)
 
-                workflow_status = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
+                workflow_status = (
+                    workflow.status.value
+                    if hasattr(workflow.status, "value")
+                    else str(workflow.status)
+                )
 
                 try:
                     await self.trace_service.complete_workflow_trace(
@@ -402,24 +467,25 @@ class ResearchService:
                     f"workflow_id={workflow_id_str} | "
                     f"error={e.message} | "
                     f"retries={e.retry_count}",
-                    exc_info=True
+                    exc_info=True,
                 )
                 workflow.mark_all_failed()
                 try:
                     await self.workflow_repository.update(workflow)
                 except Exception as db_error:
-                    logger.error(f"[ResearchService] Failed to update workflow in database after checkpoint error: {db_error}")
+                    logger.error(
+                        f"[ResearchService] Failed to update workflow in database after checkpoint error: {db_error}"
+                    )
                 await self.event_publisher.publish_error_event(
-                    workflow_id=workflow_id,
-                    message="工作流状态存储不可用，请稍后重试"
+                    workflow_id=workflow_id, message="工作流状态存储不可用，请稍后重试"
                 )
                 raise HTTPException(
                     status_code=503,
                     detail={
                         "error": "CHECKPOINT_CONNECTION_ERROR",
                         "message": "无法访问工作流状态存储，请稍后重试",
-                        "workflow_id": workflow_id_str
-                    }
+                        "workflow_id": workflow_id_str,
+                    },
                 ) from e
             except Exception as e:
                 logger.error(f"[ResearchService] Workflow execution failed: {str(e)}")
@@ -427,17 +493,18 @@ class ResearchService:
                 try:
                     await self.workflow_repository.update(workflow)
                 except Exception as db_error:
-                    logger.error(f"[ResearchService] Failed to update workflow in database after failure: {db_error}")
+                    logger.error(
+                        f"[ResearchService] Failed to update workflow in database after failure: {db_error}"
+                    )
                 await self.event_publisher.publish_error_event(
-                    workflow_id=workflow_id,
-                    message=str(e)
+                    workflow_id=workflow_id, message=str(e)
                 )
                 raise
         finally:
             # 释放分布式锁
             await self._release_workflow_lock(workflow_id_str, lock_session)
 
-    async def _acquire_workflow_lock(self, workflow_id: str) -> tuple[bool, Optional[Any]]:
+    async def _acquire_workflow_lock(self, workflow_id: str) -> tuple[bool, Any | None]:
         """获取 PostgreSQL advisory lock。
 
         返回 (acquired, session)。
@@ -450,9 +517,7 @@ class ResearchService:
         try:
             session = SessionLocal()
             result = await asyncio.to_thread(
-                session.execute,
-                text("SELECT pg_try_advisory_lock(:lock_id)"),
-                {"lock_id": lock_id}
+                session.execute, text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": lock_id}
             )
             acquired = bool(result.scalar())
             if not acquired:
@@ -469,16 +534,14 @@ class ResearchService:
             # 降级为无锁模式
             return True, None
 
-    async def _release_workflow_lock(self, workflow_id: str, session: Optional[Any]) -> None:
+    async def _release_workflow_lock(self, workflow_id: str, session: Any | None) -> None:
         """释放 PostgreSQL advisory lock 并关闭 session"""
         if not session:
             return
         lock_id = self._workflow_lock_id(workflow_id)
         try:
             await asyncio.to_thread(
-                session.execute,
-                text("SELECT pg_advisory_unlock(:lock_id)"),
-                {"lock_id": lock_id}
+                session.execute, text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id}
             )
         except Exception as e:
             logger.warning(f"[ResearchService] Failed to release advisory lock: {e}")
@@ -488,54 +551,84 @@ class ResearchService:
             except Exception:
                 pass
 
-    async def _get_final_state(self, config, workflow, workflow_id_str) -> Optional[Dict[str, Any]]:
+    async def _get_final_state(self, config, workflow, workflow_id_str) -> dict[str, Any] | None:
+        """Read the terminal state from the checkpointer, retrying once on connection loss.
+
+        Falls back to reconstructing the state from persisted tasks so the workflow
+        status is never left in an inconsistent intermediate state.
+        """
         max_retries = 2
         for retry in range(max_retries):
             try:
                 checkpointer = await self.saver_manager.get_saver()
 
                 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
                 if isinstance(checkpointer, AsyncPostgresSaver):
                     checkpoint_tuple = await checkpointer.aget_tuple(config)
                     if checkpoint_tuple and checkpoint_tuple.checkpoint:
                         final_state = checkpoint_tuple.checkpoint.get("channel_values", {})
                         if final_state:
-                            logger.info(f"[ResearchService] Got final state from AsyncPostgresSaver checkpoint (retry={retry})")
+                            logger.info(
+                                f"[ResearchService] Got final state from AsyncPostgresSaver checkpoint (retry={retry})"
+                            )
                             return final_state
                 else:
                     final_state = checkpointer.get(config)
                     if final_state:
-                        logger.info(f"[ResearchService] Got final state from InMemorySaver checkpoint (retry={retry})")
+                        logger.info(
+                            f"[ResearchService] Got final state from InMemorySaver checkpoint (retry={retry})"
+                        )
                         return final_state
 
                 break
             except Exception as e:
                 if retry < max_retries - 1:
-                    logger.warning(f"[ResearchService] Failed to get state from checkpoint (retry={retry}): {e}, retrying...")
-                    if hasattr(self.saver_manager, '_close_saver'):
+                    logger.warning(
+                        f"[ResearchService] Failed to get state from checkpoint (retry={retry}): {e}, retrying..."
+                    )
+                    if hasattr(self.saver_manager, "_close_saver"):
                         await self.saver_manager._close_saver()
                 else:
-                    logger.warning(f"[ResearchService] Failed to get state from checkpoint after {max_retries} retries: {e}")
+                    logger.warning(
+                        f"[ResearchService] Failed to get state from checkpoint after {max_retries} retries: {e}"
+                    )
 
-        logger.warning(f"[ResearchService] No state from checkpoint, calculating from database")
+        logger.warning("[ResearchService] No state from checkpoint, calculating from database")
         return await self._calculate_state_from_database(workflow_id_str)
 
-    async def _calculate_state_from_database(self, workflow_id_str: str) -> Optional[Dict[str, Any]]:
+    async def _calculate_state_from_database(self, workflow_id_str: str) -> dict[str, Any] | None:
+        """Derive workflow status, task summary and report URL from persisted data."""
         try:
             tasks = await self.task_repository.find_by_workflow_id(workflow_id_str)
-            completed_count = sum(1 for task in tasks if (task.status.value if hasattr(task.status, 'value') else task.status) == "completed")
-            failed_count = sum(1 for task in tasks if (task.status.value if hasattr(task.status, 'value') else task.status) == "failed")
+            completed_count = sum(
+                1
+                for task in tasks
+                if (task.status.value if hasattr(task.status, "value") else task.status)
+                == "completed"
+            )
+            failed_count = sum(
+                1
+                for task in tasks
+                if (task.status.value if hasattr(task.status, "value") else task.status) == "failed"
+            )
             total_count = len(tasks)
 
-            logger.info(f"[ResearchService] Tasks: {completed_count}/{total_count} completed, {failed_count} failed from database")
+            logger.info(
+                f"[ResearchService] Tasks: {completed_count}/{total_count} completed, {failed_count} failed from database"
+            )
 
             report_url = None
             try:
-                report_url = await self.object_storage.get_report_url_by_workflow_id(workflow_id_str)
+                report_url = await self.object_storage.get_report_url_by_workflow_id(
+                    workflow_id_str
+                )
                 if report_url:
                     logger.info(f"[ResearchService] Found report URL from storage: {report_url}")
             except Exception as storage_error:
-                logger.warning(f"[ResearchService] Failed to get report URL from storage: {storage_error}")
+                logger.warning(
+                    f"[ResearchService] Failed to get report URL from storage: {storage_error}"
+                )
 
             workflow_status = None
             has_report = report_url is not None
@@ -543,7 +636,7 @@ class ResearchService:
             task_summary = {
                 "total": total_count,
                 "completed": completed_count,
-                "failed": failed_count
+                "failed": failed_count,
             }
 
             if total_count == 0 or failed_count == total_count:
@@ -566,7 +659,7 @@ class ResearchService:
                 "task_summary": task_summary,
                 "report_url": report_url,
                 "error": None,
-                "tasks": tasks
+                "tasks": tasks,
             }
 
             return state
@@ -574,7 +667,14 @@ class ResearchService:
             logger.error(f"[ResearchService] Failed to calculate state from database: {e}")
             return None
 
-    async def _update_workflow_state(self, workflow: Workflow, final_state: Optional[Dict[str, Any]], workflow_id_str: str):
+    async def _update_workflow_state(
+        self, workflow: Workflow, final_state: dict[str, Any] | None, workflow_id_str: str
+    ):
+        """Apply the graph's terminal status to the workflow entity.
+
+        Unknown or missing statuses degrade to heuristics instead of leaving the
+        workflow stuck in RUNNING.
+        """
         if final_state:
             workflow_status = final_state.get("workflow_status")
             task_summary = final_state.get("task_summary", {})
@@ -589,31 +689,46 @@ class ResearchService:
             if workflow_status:
                 if workflow_status == "all_success":
                     workflow.mark_all_success(report_url)
-                    logger.info(f"[ResearchService] Workflow {workflow_id_str} marked as ALL_SUCCESS")
+                    logger.info(
+                        f"[ResearchService] Workflow {workflow_id_str} marked as ALL_SUCCESS"
+                    )
 
                 elif workflow_status == "partial_failed":
                     workflow.mark_partial_failed(report_url)
-                    logger.info(f"[ResearchService] Workflow {workflow_id_str} marked as PARTIAL_FAILED")
+                    logger.info(
+                        f"[ResearchService] Workflow {workflow_id_str} marked as PARTIAL_FAILED"
+                    )
 
                 elif workflow_status == "all_failed":
                     workflow.mark_all_failed()
-                    logger.info(f"[ResearchService] Workflow {workflow_id_str} marked as ALL_FAILED")
+                    logger.info(
+                        f"[ResearchService] Workflow {workflow_id_str} marked as ALL_FAILED"
+                    )
 
                 elif workflow_status == "report_failed":
                     workflow.mark_report_failed()
-                    logger.info(f"[ResearchService] Workflow {workflow_id_str} marked as REPORT_FAILED")
+                    logger.info(
+                        f"[ResearchService] Workflow {workflow_id_str} marked as REPORT_FAILED"
+                    )
 
                 else:
-                    logger.warning(f"[ResearchService] Unknown workflow status: {workflow_status}, using fallback logic")
+                    logger.warning(
+                        f"[ResearchService] Unknown workflow status: {workflow_status}, using fallback logic"
+                    )
                     self._update_workflow_fallback(workflow, final_state, workflow_id_str)
             else:
-                logger.warning("[ResearchService] No workflow_status in final state, using fallback logic")
+                logger.warning(
+                    "[ResearchService] No workflow_status in final state, using fallback logic"
+                )
                 self._update_workflow_fallback(workflow, final_state, workflow_id_str)
         else:
             logger.warning("[ResearchService] No final state available, checking database tasks")
             await self._update_workflow_from_database(workflow, workflow_id_str)
 
-    def _update_workflow_fallback(self, workflow: Workflow, final_state: Dict[str, Any], workflow_id_str: str):
+    def _update_workflow_fallback(
+        self, workflow: Workflow, final_state: dict[str, Any], workflow_id_str: str
+    ):
+        """Infer a terminal status from report_url, error and task statuses."""
         report_url = final_state.get("report_url")
         error = final_state.get("error")
 
@@ -628,8 +743,8 @@ class ResearchService:
             total_count = len(tasks)
 
             for t in tasks:
-                if hasattr(t, 'status'):
-                    status_value = t.status.value if hasattr(t.status, 'value') else str(t.status)
+                if hasattr(t, "status"):
+                    status_value = t.status.value if hasattr(t.status, "value") else str(t.status)
                 elif isinstance(t, dict):
                     status_value = t.get("status", "")
                 else:
@@ -649,16 +764,21 @@ class ResearchService:
             elif total_count == 0:
                 workflow.mark_all_failed()
             else:
-                logger.warning(f"[ResearchService] Workflow still in progress")
+                logger.warning("[ResearchService] Workflow still in progress")
 
     async def _force_update_workflow_to_database(self, workflow: Workflow):
+        """Persist the workflow once more after status finalisation; failures are logged only."""
         try:
             await self.workflow_repository.update(workflow)
-            logger.info(f"[ResearchService] Workflow force updated - status: {workflow.status}, completed_at: {workflow.completed_at}")
+            logger.info(
+                f"[ResearchService] Workflow force updated - status: {workflow.status}, completed_at: {workflow.completed_at}"
+            )
         except Exception as db_error:
-            logger.error(f"[ResearchService] Failed to force update workflow in database: {db_error}")
+            logger.error(
+                f"[ResearchService] Failed to force update workflow in database: {db_error}"
+            )
 
-    async def get_workflow_status(self, workflow_id: Union[str, UUID]) -> ResearchResponse:
+    async def get_workflow_status(self, workflow_id: str | UUID) -> ResearchResponse:
         """获取工作流状态 — 纯查询操作，不触发任何重型组件初始化"""
         workflow_id_str = str(workflow_id)
 
@@ -668,55 +788,78 @@ class ResearchService:
 
         return self._to_research_response(workflow)
 
-    async def _update_workflow_from_database(self, workflow: Workflow, workflow_id_str: str) -> None:
+    async def _update_workflow_from_database(
+        self, workflow: Workflow, workflow_id_str: str
+    ) -> None:
+        """Sync the entity with DB state when no checkpoint state is available."""
         try:
             db_workflow = await self.workflow_repository.find_by_id(workflow_id_str)
             if not db_workflow:
-                logger.warning(f"[ResearchService] Workflow not found in database: {workflow_id_str}")
+                logger.warning(
+                    f"[ResearchService] Workflow not found in database: {workflow_id_str}"
+                )
                 return
 
-            status_value = db_workflow.status.value if hasattr(db_workflow.status, 'value') else db_workflow.status
+            status_value = (
+                db_workflow.status.value
+                if hasattr(db_workflow.status, "value")
+                else db_workflow.status
+            )
 
             if status_value == "completed":
-                logger.info(f"[ResearchService] Workflow already completed in database")
+                logger.info("[ResearchService] Workflow already completed in database")
                 workflow.status = db_workflow.status
                 workflow.report_url = db_workflow.report_url
                 workflow.completed_at = db_workflow.completed_at
             elif status_value == "failed":
-                logger.info(f"[ResearchService] Workflow already failed in database")
+                logger.info("[ResearchService] Workflow already failed in database")
                 workflow.status = db_workflow.status
             else:
-                logger.warning(f"[ResearchService] Workflow status in database is still '{status_value}', checking tasks for completion")
+                logger.warning(
+                    f"[ResearchService] Workflow status in database is still '{status_value}', checking tasks for completion"
+                )
                 tasks = await self.task_repository.find_by_workflow_id(workflow_id_str)
-                completed_count = sum(1 for task in tasks if (task.status.value if hasattr(task.status, 'value') else task.status) == "completed")
+                completed_count = sum(
+                    1
+                    for task in tasks
+                    if (task.status.value if hasattr(task.status, "value") else task.status)
+                    == "completed"
+                )
                 total_count = len(tasks)
 
                 logger.info(f"[ResearchService] Tasks: {completed_count}/{total_count} completed")
 
                 if completed_count > 0 and completed_count == total_count:
                     workflow.mark_all_success(f"/reports/{workflow_id_str}")
-                    logger.info(f"[ResearchService] Workflow marked as completed based on task completion")
+                    logger.info(
+                        "[ResearchService] Workflow marked as completed based on task completion"
+                    )
                 elif completed_count == 0 and total_count == 0:
                     workflow.mark_all_failed()
-                    logger.warning(f"[ResearchService] No tasks found, marking workflow as failed")
+                    logger.warning("[ResearchService] No tasks found, marking workflow as failed")
                 else:
-                    logger.warning(f"[ResearchService] Workflow still in progress: {completed_count}/{total_count} tasks completed")
+                    logger.warning(
+                        f"[ResearchService] Workflow still in progress: {completed_count}/{total_count} tasks completed"
+                    )
 
             await self.workflow_repository.update(workflow)
-            logger.info(f"[ResearchService] Workflow updated from database - status: {workflow.status}")
+            logger.info(
+                f"[ResearchService] Workflow updated from database - status: {workflow.status}"
+            )
         except Exception as e:
             logger.error(f"[ResearchService] Failed to update workflow from database: {e}")
 
     def _to_workflow_response(self, workflow: Workflow) -> WorkflowResponse:
+        """Map the domain entity to the create-workflow response DTO."""
         # 过滤掉 reflection 补充任务（order >= 100），避免前端展示内部任务
         task_responses = [
-            self._to_task_response(task)
-            for task in workflow.tasks
-            if (task.order or 0) < 100
+            self._to_task_response(task) for task in workflow.tasks if (task.order or 0) < 100
         ]
 
         # 确保状态字段转换为字符串
-        status_value = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
+        status_value = (
+            workflow.status.value if hasattr(workflow.status, "value") else str(workflow.status)
+        )
 
         return WorkflowResponse(
             workflow_id=workflow.workflow_id,
@@ -729,12 +872,15 @@ class ResearchService:
             updated_at=workflow.updated_at,
             started_at=workflow.started_at,
             completed_at=workflow.completed_at,
-            tasks=task_responses
+            tasks=task_responses,
         )
 
     def _to_research_response(self, workflow: Workflow) -> ResearchResponse:
+        """Map the domain entity to the status-query response DTO."""
         # 确保状态字段转换为字符串
-        status_value = workflow.status.value if hasattr(workflow.status, 'value') else str(workflow.status)
+        status_value = (
+            workflow.status.value if hasattr(workflow.status, "value") else str(workflow.status)
+        )
 
         # 过滤掉 reflection 补充任务（order >= 100），避免前端展示内部任务
         return ResearchResponse(
@@ -748,27 +894,31 @@ class ResearchService:
             updated_at=workflow.updated_at,
             started_at=workflow.started_at,
             completed_at=workflow.completed_at,
-            tasks=[self._to_task_response(task) for task in workflow.tasks if (task.order or 0) < 100]
+            tasks=[
+                self._to_task_response(task) for task in workflow.tasks if (task.order or 0) < 100
+            ],
         )
 
     def _to_task_response(self, task) -> TaskResponse:
+        """Map a task entity to its response DTO."""
         return TaskResponse(
             task_id=task.task_id,
             title=task.title,
             intent=task.intent,
             query=task.query,
             order=task.order,
-            status=task.status.value if hasattr(task.status, 'value') else task.status,
+            status=task.status.value if hasattr(task.status, "value") else task.status,
             summary=task.summary,
             sources_summary=task.sources_summary,
             notices=task.notices,
             created_at=task.created_at,
             updated_at=task.updated_at,
             started_at=task.started_at,
-            completed_at=task.completed_at
+            completed_at=task.completed_at,
         )
 
-    def get_report_file_path(self, report_id: str) -> Optional[Path]:
+    def get_report_file_path(self, report_id: str) -> Path | None:
+        """Resolve a report file path, rejecting traversal outside the storage root."""
         reports_path = Path(settings.REPORT_STORAGE_PATH)
         file_path = reports_path / report_id
 
@@ -784,7 +934,7 @@ class ResearchService:
         logger.info(f"Report file path resolved: {safe_file_path}")
         return safe_file_path
 
-    async def get_report_content(self, workflow_id: Union[str, UUID]) -> Optional[str]:
+    async def get_report_content(self, workflow_id: str | UUID) -> str | None:
         """获取报告内容 — 只需要 object_storage，首次访问时才会初始化"""
         workflow_id_str = str(workflow_id)
         logger.info(f"[ResearchService] Getting report content for workflow: {workflow_id_str}")
@@ -809,4 +959,4 @@ class ResearchService:
     def _workflow_lock_id(workflow_id: str) -> int:
         """将 workflow_id 映射为 PostgreSQL advisory lock 的 int64 key"""
         h = hashlib.sha256(workflow_id.encode()).digest()
-        return int.from_bytes(h[:8], 'big') & 0x7FFFFFFFFFFFFFFF
+        return int.from_bytes(h[:8], "big") & 0x7FFFFFFFFFFFFFFF

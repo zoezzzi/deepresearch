@@ -6,31 +6,34 @@
 
 v4.0: 移除 Store + DB 批量写入重试 + 衍生数据按需重算
 """
-from typing import Dict, Any, List, Optional
+
 import asyncio
 import time
 import uuid
-from langgraph.graph import StateGraph, END
-from app.dev_survey.workflow.state import WorkflowState
-from app.dev_survey.services import (
-    ResearchPlanService,
-    TaskExecutionService,
-    ReportGenerationService,
-    EvaluationService
-)
+from typing import Any
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.graph import END, StateGraph
+
+from app.common.utils.time_utils import get_current_utc_time
+from app.dev_survey.events import EventPublisher
 from app.dev_survey.models.models import Task
 from app.dev_survey.repositories import TaskRepository
-from app.dev_survey.events import EventPublisher
+from app.dev_survey.services import (
+    EvaluationService,
+    ReportGenerationService,
+    ResearchPlanService,
+    TaskExecutionService,
+)
 from app.dev_survey.tasks import run_evaluation_task
 from app.dev_survey.workflow.parallel_executor import ParallelTaskExecutor
-from harness.storage.base import ObjectStorage
+from app.dev_survey.workflow.state import WorkflowState
+from harness.config import get_harness_settings
 from harness.evaluation.orchestrator import EvaluationOrchestrator
 from harness.logger import logger
-from harness.config import get_harness_settings
-from harness.observability.trace_service import TraceService
 from harness.observability.trace_context import get_trace_context
-from app.common.utils.time_utils import get_current_utc_time
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from harness.observability.trace_service import TraceService
+from harness.storage.base import ObjectStorage
 
 settings = get_harness_settings()
 
@@ -70,6 +73,7 @@ class ResearchWorkflowGraphParallel:
         self.trace_service = trace_service
         self.max_concurrent_tasks = max_concurrent_tasks
         self.critic_agent = critic_agent
+        # 缺少 critic 时强制关闭反思，避免条件边进入 reflect 节点后访问空对象
         self.reflection_enabled = reflection_enabled and critic_agent is not None
         self.checkpointer = checkpointer
 
@@ -77,12 +81,13 @@ class ResearchWorkflowGraphParallel:
             task_execution_service=task_execution_service,
             event_publisher=event_publisher,
             max_concurrent_tasks=max_concurrent_tasks,
-            trace_service=trace_service
+            trace_service=trace_service,
         )
 
         self._graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
+        """Compile the LangGraph topology; reflection nodes are wired only when enabled."""
         workflow = StateGraph(WorkflowState)
 
         workflow.add_node("plan", self._plan_node)
@@ -96,14 +101,12 @@ class ResearchWorkflowGraphParallel:
         if self.reflection_enabled:
             workflow.add_node("reflect", self._reflect_node)
             workflow.add_conditional_edges(
-                "generate_report",
-                self._should_reflect,
-                {"reflect": "reflect", "end": END}
+                "generate_report", self._should_reflect, {"reflect": "reflect", "end": END}
             )
             workflow.add_conditional_edges(
                 "reflect",
                 self._should_continue_reflection,
-                {"execute": "execute", "generate_report": "generate_report", "end": END}
+                {"execute": "execute", "generate_report": "generate_report", "end": END},
             )
         else:
             workflow.add_edge("generate_report", END)
@@ -111,6 +114,7 @@ class ResearchWorkflowGraphParallel:
         return workflow.compile(checkpointer=self.checkpointer)
 
     def _should_reflect(self, state: WorkflowState) -> str:
+        """Conditional edge after report generation; at most one reflection round is allowed."""
         if not self.reflection_enabled:
             return "end"
         quality_report = state.get("quality_report")
@@ -125,10 +129,11 @@ class ResearchWorkflowGraphParallel:
                 f"(score={quality_report.get('overall_score')}), skipping reflection"
             )
             return "end"
-        logger.info(f"[WorkflowParallel] Triggering self-reflection (round 1/1)")
+        logger.info("[WorkflowParallel] Triggering self-reflection (round 1/1)")
         return "reflect"
 
     def _should_continue_reflection(self, state: WorkflowState) -> str:
+        """Re-enter execute only when reflection produced pending supplementary tasks."""
         supplementary_queries = state.get("supplementary_queries", [])
         if supplementary_queries:
             new_tasks = state.get("tasks", [])
@@ -138,20 +143,20 @@ class ResearchWorkflowGraphParallel:
                 return "execute"
         return "end"
 
-    async def _reflect_node(self, state: WorkflowState) -> Dict[str, Any]:
-        logger.info(f"[WorkflowParallel] Starting self-reflection for workflow {state['workflow_id']}")
+    async def _reflect_node(self, state: WorkflowState) -> dict[str, Any]:
+        """Evaluate report quality and enqueue supplementary tasks for critical gaps."""
+        logger.info(
+            f"[WorkflowParallel] Starting self-reflection for workflow {state['workflow_id']}"
+        )
         reflection_round = state.get("reflection_round", 0) + 1
         report_content = state.get("report_content", "")
         topic = state["topic"]
         sub_questions = state.get("sub_questions", [])
-        workflow_id = state["workflow_id"]
 
         if not report_content:
+            # 没有报告可评估时仍递增轮次，防止条件边在同一次调用中反复触发反思
             logger.warning("[WorkflowParallel] No report content for reflection")
-            return {
-                "reflection_round": reflection_round,
-                "updated_at": get_current_utc_time()
-            }
+            return {"reflection_round": reflection_round, "updated_at": get_current_utc_time()}
 
         try:
             # 从 Checkpoint 状态读取 quality_report（原从 Store 加载）
@@ -161,7 +166,7 @@ class ResearchWorkflowGraphParallel:
                     topic=topic,
                     report_content=report_content,
                     sub_questions=sub_questions,
-                    tasks=state.get("tasks", [])
+                    tasks=state.get("tasks", []),
                 )
 
             supplementary_queries = []
@@ -174,23 +179,22 @@ class ResearchWorkflowGraphParallel:
                     "tasks": updated_tasks,
                     "supplementary_queries": supplementary_queries,
                     "reflection_round": reflection_round,
-                    "updated_at": get_current_utc_time()
+                    "updated_at": get_current_utc_time(),
                 }
 
-            return {
-                "reflection_round": reflection_round,
-                "updated_at": get_current_utc_time()
-            }
+            return {"reflection_round": reflection_round, "updated_at": get_current_utc_time()}
         except Exception as e:
             logger.error(f"[WorkflowParallel] Reflection failed: {str(e)}")
-            return {
-                "reflection_round": reflection_round,
-                "updated_at": get_current_utc_time()
-            }
+            return {"reflection_round": reflection_round, "updated_at": get_current_utc_time()}
 
     async def _add_supplementary_tasks(
-        self, state: WorkflowState, supplementary_queries: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, state: WorkflowState, supplementary_queries: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Persist reflection-derived tasks and append them to the state task list.
+
+        Orders start at 100 so downstream code can distinguish supplementary tasks
+        from the original plan; DB failures are logged and tolerated.
+        """
         existing_tasks = state.get("tasks", [])
         max_order = max((t.get("order", 0) for t in existing_tasks), default=0)
 
@@ -198,15 +202,17 @@ class ResearchWorkflowGraphParallel:
         for i, sq in enumerate(supplementary_queries):
             task_id = str(uuid.uuid4())
             order = max_order + 100 + i
-            new_tasks.append({
-                "task_id": task_id,
-                "title": sq.get("title", "Supplementary Research"),
-                "intent": sq.get("intent", ""),
-                "query": sq.get("query", ""),
-                "order": order,
-                "depends_on": [],
-                "status": "pending"
-            })
+            new_tasks.append(
+                {
+                    "task_id": task_id,
+                    "title": sq.get("title", "Supplementary Research"),
+                    "intent": sq.get("intent", ""),
+                    "query": sq.get("query", ""),
+                    "order": order,
+                    "depends_on": [],
+                    "status": "pending",
+                }
+            )
 
             task_entity = Task(
                 task_id=task_id,
@@ -215,7 +221,7 @@ class ResearchWorkflowGraphParallel:
                 intent=sq.get("intent", ""),
                 query=sq.get("query", ""),
                 order=order,
-                depends_on=[]
+                depends_on=[],
             )
             try:
                 await self.task_repository.save(task_entity)
@@ -226,6 +232,7 @@ class ResearchWorkflowGraphParallel:
         return existing_tasks + new_tasks
 
     def _calculate_optimal_concurrency(self, task_count: int) -> int:
+        """Return a concurrency cap sized to the batch, never above the configured maximum."""
         if task_count == 0:
             return 1
         if task_count <= 2:
@@ -237,7 +244,8 @@ class ResearchWorkflowGraphParallel:
         else:
             return min(self.max_concurrent_tasks, 5)
 
-    async def _execute_node(self, state: WorkflowState) -> Dict[str, Any]:
+    async def _execute_node(self, state: WorkflowState) -> dict[str, Any]:
+        """Run pending tasks in parallel and push their raw results into the checkpoint."""
         workflow_id = state["workflow_id"]
         task_dicts = state["tasks"]
 
@@ -259,7 +267,7 @@ class ResearchWorkflowGraphParallel:
             return {
                 "tasks": result["tasks"],
                 "error": result["error"],
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
 
         # task_results 直接进入 Checkpoint（原写入 Store），衍生数据由 generate_report 节点按需重算
@@ -271,37 +279,43 @@ class ResearchWorkflowGraphParallel:
         return {
             "tasks": result["tasks"],
             "task_results": result["task_results"],
-            "updated_at": get_current_utc_time()
+            "updated_at": get_current_utc_time(),
         }
 
-    async def _execute_tasks_parallel(self, state: WorkflowState, task_dicts: List[Dict[str, Any]], workflow_id: str) -> Dict[str, Any]:
+    async def _execute_tasks_parallel(
+        self, state: WorkflowState, task_dicts: list[dict[str, Any]], workflow_id: str
+    ) -> dict[str, Any]:
+        """Build task entities, tune concurrency, then delegate to the parallel executor."""
         pending_dicts = [t for t in task_dicts if t.get("status") == "pending"]
         tasks = self._build_task_entities(pending_dicts, workflow_id)
 
         optimal_concurrency = self._calculate_optimal_concurrency(len(tasks))
         if optimal_concurrency != self.max_concurrent_tasks:
-            logger.info(f"[WorkflowParallel] Adjusting concurrency from {self.max_concurrent_tasks} to {optimal_concurrency}")
+            logger.info(
+                f"[WorkflowParallel] Adjusting concurrency from {self.max_concurrent_tasks} to {optimal_concurrency}"
+            )
+            # 注意：executor 实例在同一个 graph 内共享，此处改写并发度会影响同一实例上的后续批次
             self.parallel_executor.max_concurrent_tasks = optimal_concurrency
             self.parallel_executor.semaphore = asyncio.Semaphore(optimal_concurrency)
 
         trace_context = get_trace_context()
 
         try:
-            task_results = await self.parallel_executor.execute_tasks_parallel(tasks, trace_context=trace_context)
+            task_results = await self.parallel_executor.execute_tasks_parallel(
+                tasks, trace_context=trace_context
+            )
             return await self._process_execution_results(task_dicts, task_results, workflow_id)
         except Exception as e:
             logger.error(f"[WorkflowParallel] Parallel task execution failed: {str(e)}")
             await self.event_publisher.publish_error_event(
-                workflow_id=workflow_id,
-                message=f"Parallel execution failed: {str(e)}"
+                workflow_id=workflow_id, message=f"Parallel execution failed: {str(e)}"
             )
-            return {
-                "error": str(e),
-                "tasks": task_dicts,
-                "updated_at": get_current_utc_time()
-            }
+            return {"error": str(e), "tasks": task_dicts, "updated_at": get_current_utc_time()}
 
-    def _build_task_entities(self, task_dicts: List[Dict[str, Any]], workflow_id: str) -> List[Task]:
+    def _build_task_entities(
+        self, task_dicts: list[dict[str, Any]], workflow_id: str
+    ) -> list[Task]:
+        """Rehydrate checkpoint task dicts into domain entities for the executor."""
         return [
             Task(
                 task_id=task_dict["task_id"],
@@ -309,12 +323,15 @@ class ResearchWorkflowGraphParallel:
                 title=task_dict["title"],
                 intent=task_dict["intent"],
                 query=task_dict["query"],
-                order=task_dict["order"]
+                order=task_dict["order"],
             )
             for task_dict in task_dicts
         ]
 
-    async def _process_execution_results(self, task_dicts: List[Dict[str, Any]], task_results: List[Dict[str, Any]], workflow_id: str) -> Dict[str, Any]:
+    async def _process_execution_results(
+        self, task_dicts: list[dict[str, Any]], task_results: list[dict[str, Any]], workflow_id: str
+    ) -> dict[str, Any]:
+        """Merge per-task statuses, then persist them before the checkpoint is written."""
         updated_tasks = task_dicts.copy()
 
         for result in task_results:
@@ -327,16 +344,16 @@ class ResearchWorkflowGraphParallel:
         await self._update_tasks_batch_with_retry(workflow_id, task_results)
 
         # 衍生数据不再预计算，由 generate_report 节点按需重算
-        logger.info(f"[WorkflowParallel] Task execution complete")
+        logger.info("[WorkflowParallel] Task execution complete")
 
         return {
             "tasks": updated_tasks,
             "task_results": task_results,
-            "updated_at": get_current_utc_time()
+            "updated_at": get_current_utc_time(),
         }
 
     async def _update_tasks_batch_with_retry(
-        self, workflow_id: str, task_results: List[Dict[str, Any]]
+        self, workflow_id: str, task_results: list[dict[str, Any]]
     ) -> None:
         """DB 批量更新，带重试。
 
@@ -399,7 +416,8 @@ class ResearchWorkflowGraphParallel:
             f"for workflow {workflow_id}: {last_error}"
         )
 
-    async def _plan_node(self, state: WorkflowState) -> Dict[str, Any]:
+    async def _plan_node(self, state: WorkflowState) -> dict[str, Any]:
+        """Generate and persist the task plan, then publish it to SSE subscribers."""
         logger.info(f"[WorkflowParallel] Executing plan node for workflow {state['workflow_id']}")
 
         try:
@@ -408,9 +426,7 @@ class ResearchWorkflowGraphParallel:
             description = ""  # description 从 DB 表读取，不入 checkpoint
 
             tasks = await self.research_plan_service.generate_tasks(
-                workflow_id=workflow_id,
-                topic=topic,
-                description=description
+                workflow_id=workflow_id, topic=topic, description=description
             )
 
             task_dicts = [
@@ -421,7 +437,7 @@ class ResearchWorkflowGraphParallel:
                     "query": task.query,
                     "order": task.order,
                     "depends_on": task.depends_on,
-                    "status": "pending"
+                    "status": "pending",
                 }
                 for task in tasks
             ]
@@ -433,8 +449,7 @@ class ResearchWorkflowGraphParallel:
                 logger.error(f"[WorkflowParallel] Failed to save tasks to database: {db_error}")
 
             await self.event_publisher.publish_plan_event(
-                workflow_id=state["workflow_id"],
-                tasks=task_dicts
+                workflow_id=state["workflow_id"], tasks=task_dicts
             )
 
             sub_questions = [task.title for task in tasks]
@@ -443,20 +458,22 @@ class ResearchWorkflowGraphParallel:
             return {
                 "tasks": task_dicts,
                 "sub_questions": sub_questions,
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
         except Exception as e:
             logger.error(f"[WorkflowParallel] Plan node failed: {str(e)}")
             await self.event_publisher.publish_error_event(
-                workflow_id=state["workflow_id"],
-                message=str(e)
+                workflow_id=state["workflow_id"], message=str(e)
             )
-            return {
-                "error": str(e),
-                "updated_at": get_current_utc_time()
-            }
+            return {"error": str(e), "updated_at": get_current_utc_time()}
 
-    async def _generate_report_node(self, state: WorkflowState) -> Dict[str, Any]:
+    async def _generate_report_node(self, state: WorkflowState) -> dict[str, Any]:
+        """Render the final report, upload it, and fire-and-forget the evaluation task.
+
+        When fewer than half of the original tasks completed, report generation is
+        skipped and the workflow is marked accordingly. All task-derived inputs are
+        recomputed here from the checkpoint, falling back to the database.
+        """
         logger.info(f"[WorkflowParallel] Generating report for workflow {state['workflow_id']}")
         workflow_id = state["workflow_id"]
 
@@ -465,15 +482,14 @@ class ResearchWorkflowGraphParallel:
         completed_tasks = sum(1 for t in tasks if t.get("status") == "completed")
         failed_tasks = sum(1 for t in tasks if t.get("status") == "failed")
 
-        logger.info(f"[WorkflowParallel] Task summary: {completed_tasks}/{total_tasks} completed, {failed_tasks} failed")
+        logger.info(
+            f"[WorkflowParallel] Task summary: {completed_tasks}/{total_tasks} completed, {failed_tasks} failed"
+        )
 
-        task_summary = {
-            "total": total_tasks,
-            "completed": completed_tasks,
-            "failed": failed_tasks
-        }
+        task_summary = {"total": total_tasks, "completed": completed_tasks, "failed": failed_tasks}
 
         original_task_count = sum(1 for t in tasks if t.get("order", 0) < 100)
+        # 完成率只统计原始计划任务，reflection 补充任务（order >= 100）不应拉低分母
         completion_rate = completed_tasks / max(original_task_count, 1)
 
         if completion_rate <= 0.5:
@@ -481,24 +497,25 @@ class ResearchWorkflowGraphParallel:
             return {
                 "report_content": None,
                 "report_url": None,
-                "workflow_status": "all_failed" if failed_tasks == total_tasks else "partial_failed",
+                "workflow_status": "all_failed"
+                if failed_tasks == total_tasks
+                else "partial_failed",
                 "task_summary": task_summary,
-                "updated_at": get_current_utc_time()
+                "updated_at": get_current_utc_time(),
             }
 
         # ─── ① task_results：从 Checkpoint 获取，降级到 DB ───
         task_results = state.get("task_results", [])
         if not task_results:
-            logger.info(f"[WorkflowParallel] Checkpoint miss for task_results, falling back to DB")
+            logger.info("[WorkflowParallel] Checkpoint miss for task_results, falling back to DB")
             task_results = await self._load_task_results_from_db(workflow_id)
 
         # ─── ② 衍生数据：按需重算 ───
-        retrieved_chunks = [
-            r["sources_summary"] for r in task_results if r.get("sources_summary")
-        ]
+        retrieved_chunks = [r["sources_summary"] for r in task_results if r.get("sources_summary")]
         retrieved_documents = [
             {"content": r["sources_summary"], "title": r["title"], "task_id": r["task_id"]}
-            for r in task_results if r.get("sources_summary")
+            for r in task_results
+            if r.get("sources_summary")
         ]
 
         sub_questions = state.get("sub_questions", [])
@@ -510,12 +527,9 @@ class ResearchWorkflowGraphParallel:
         evaluation_id = None
 
         try:
-            logger.info(f"[WorkflowParallel] Starting report generation")
+            logger.info("[WorkflowParallel] Starting report generation")
 
-            task_results_map = {
-                result["task_id"]: result
-                for result in (task_results or [])
-            }
+            task_results_map = {result["task_id"]: result for result in (task_results or [])}
 
             task_entities = []
             for task_dict in state["tasks"]:
@@ -525,7 +539,7 @@ class ResearchWorkflowGraphParallel:
                     title=task_dict["title"],
                     intent=task_dict["intent"],
                     query=task_dict["query"],
-                    order=task_dict["order"]
+                    order=task_dict["order"],
                 )
                 if task_dict["task_id"] in task_results_map:
                     result = task_results_map[task_dict["task_id"]]
@@ -535,9 +549,7 @@ class ResearchWorkflowGraphParallel:
                 task_entities.append(task)
 
             report = await self.report_generation_service.generate_report(
-                workflow_id=workflow_id,
-                topic=state["topic"],
-                tasks=task_entities
+                workflow_id=workflow_id, topic=state["topic"], tasks=task_entities
             )
             report_content = report.content
             report_generated = True
@@ -550,22 +562,24 @@ class ResearchWorkflowGraphParallel:
                     bucket_name="reports",
                     object_name=report_filename,
                     data=report_content_bytes,
-                    content_type="text/markdown"
+                    content_type="text/markdown",
                 )
             except Exception as storage_error:
                 logger.error(f"[WorkflowParallel] Failed to save report: {storage_error}")
                 report_url = f"/reports/{state['workflow_id']}"
 
             await self.event_publisher.publish_result_event(
-                workflow_id=state["workflow_id"],
-                report_url=report_url
+                workflow_id=state["workflow_id"], report_url=report_url
             )
 
             if report_generated:
                 try:
                     scenario_id = state.get("scenario_id", "dev_survey_v1")
-                    evaluation = await self.evaluation_service.create_evaluation(workflow_id, scenario_id)
+                    evaluation = await self.evaluation_service.create_evaluation(
+                        workflow_id, scenario_id
+                    )
                     evaluation_id = evaluation.evaluation_id
+                    # 评测以游离任务执行：不阻塞工作流收尾，也不参与 Checkpoint 状态
                     asyncio.create_task(
                         run_evaluation_task(
                             evaluation_id=evaluation_id,
@@ -578,7 +592,7 @@ class ResearchWorkflowGraphParallel:
                             retrieved_documents=retrieved_documents,
                             citations=[],
                             evaluation_service=self.evaluation_service,
-                            evaluation_orchestrator=self.evaluation_orchestrator
+                            evaluation_orchestrator=self.evaluation_orchestrator,
                         )
                     )
                 except Exception as eval_error:
@@ -599,25 +613,30 @@ class ResearchWorkflowGraphParallel:
                             bucket_name="reports",
                             object_name=report_filename,
                             data=report_content_bytes,
-                            content_type="text/markdown"
+                            content_type="text/markdown",
                         )
                         await self.event_publisher.publish_result_event(
-                            workflow_id=state["workflow_id"],
-                            report_url=report_url
+                            workflow_id=state["workflow_id"], report_url=report_url
                         )
                     except Exception as storage_error:
-                        logger.error(f"[WorkflowParallel] Failed to save minimal report: {storage_error}")
+                        logger.error(
+                            f"[WorkflowParallel] Failed to save minimal report: {storage_error}"
+                        )
             except Exception as fallback_error:
                 logger.error(f"[WorkflowParallel] Minimal report failed: {fallback_error}")
             await self.event_publisher.publish_error_event(
                 workflow_id=state["workflow_id"],
-                message=f"Report generation failed: {report_error}"
+                message=f"Report generation failed: {report_error}",
             )
 
         if report_generated:
-            workflow_status = "all_success" if completed_tasks == original_task_count else "partial_failed"
+            workflow_status = (
+                "all_success" if completed_tasks == original_task_count else "partial_failed"
+            )
         else:
-            workflow_status = "report_failed" if completed_tasks == original_task_count else "partial_failed"
+            workflow_status = (
+                "report_failed" if completed_tasks == original_task_count else "partial_failed"
+            )
 
         quality_report = None
         if self.reflection_enabled and report_generated and report_content:
@@ -626,7 +645,7 @@ class ResearchWorkflowGraphParallel:
                     topic=state["topic"],
                     report_content=report_content,
                     sub_questions=state.get("sub_questions", []),
-                    tasks=state.get("tasks", [])
+                    tasks=state.get("tasks", []),
                 )
                 # quality_report 写入 Checkpoint state（原写入 Store）
                 logger.info(
@@ -641,7 +660,7 @@ class ResearchWorkflowGraphParallel:
             "report_url": report_url,
             "workflow_status": workflow_status,
             "task_summary": task_summary,
-            "updated_at": get_current_utc_time()
+            "updated_at": get_current_utc_time(),
         }
         if report_error:
             result["error"] = report_error
@@ -651,6 +670,7 @@ class ResearchWorkflowGraphParallel:
         return result
 
     async def _generate_minimal_report(self, state: WorkflowState) -> str:
+        """Build a degraded Markdown report listing only completed tasks."""
         try:
             topic = state["topic"]
             tasks = state.get("tasks", [])
@@ -666,20 +686,27 @@ class ResearchWorkflowGraphParallel:
             logger.error(f"[WorkflowParallel] Minimal report failed: {e}")
             return ""
 
-    async def _load_task_results_from_db(self, workflow_id: str) -> List[Dict[str, Any]]:
+    async def _load_task_results_from_db(self, workflow_id: str) -> list[dict[str, Any]]:
+        """Rebuild task results from persisted tasks when the checkpoint has none."""
         try:
             tasks = await self.task_repository.find_by_workflow_id(workflow_id)
             results = []
             for task in tasks:
-                status = task.status.value if hasattr(task.status, 'value') else str(task.status)
-                results.append({
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "status": status if status == "completed" else "failed" if status == "failed" else "pending",
-                    "summary": task.summary,
-                    "sources_summary": task.sources_summary,
-                    "notices": task.notices,
-                })
+                status = task.status.value if hasattr(task.status, "value") else str(task.status)
+                results.append(
+                    {
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "status": status
+                        if status == "completed"
+                        else "failed"
+                        if status == "failed"
+                        else "pending",
+                        "summary": task.summary,
+                        "sources_summary": task.sources_summary,
+                        "notices": task.notices,
+                    }
+                )
             logger.info(f"[WorkflowParallel] Loaded {len(results)} task results from DB")
             return results
         except Exception as e:
@@ -688,4 +715,5 @@ class ResearchWorkflowGraphParallel:
 
     @property
     def graph(self):
+        """Compiled LangGraph instance used by the service to invoke the workflow."""
         return self._graph

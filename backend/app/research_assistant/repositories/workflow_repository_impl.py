@@ -1,10 +1,8 @@
-from typing import Optional
-from app.infrastructure.db.models import WorkflowModel, TaskModel
+from app.infrastructure.db.models import TaskModel, WorkflowModel
 from app.infrastructure.db.repositories.base_workflow_repository import BaseWorkflowRepository
+from app.research_assistant.models.enums import TaskStatus, WorkflowStatus
+from app.research_assistant.models.models import Task, Workflow
 from app.research_assistant.repositories import WorkflowRepository
-from app.research_assistant.models.models import Workflow, Task
-from app.research_assistant.models.enums import WorkflowStatus, TaskStatus
-from harness.logger import logger
 
 
 class ResearchAssistantWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRepository):
@@ -19,7 +17,7 @@ class ResearchAssistantWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRe
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
-            completed_at=model.completed_at
+            completed_at=model.completed_at,
         )
         for task_model in model.tasks:
             task = self._task_to_domain_entity(task_model)
@@ -41,7 +39,7 @@ class ResearchAssistantWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRe
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
-            completed_at=model.completed_at
+            completed_at=model.completed_at,
         )
 
     def _to_persistence_model(self, workflow: Workflow) -> WorkflowModel:
@@ -55,5 +53,5 @@ class ResearchAssistantWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRe
             created_at=workflow.created_at,
             updated_at=workflow.updated_at,
             started_at=workflow.started_at,
-            completed_at=workflow.completed_at
+            completed_at=workflow.completed_at,
         )

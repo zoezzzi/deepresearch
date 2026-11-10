@@ -11,5 +11,5 @@ SCENARIO_UI_CONFIG = {
     "navbar_title": "开发者调研助手",
     "form_title": "开始新的技术调研",
     "topic_label": "调研主题 *",
-    "topic_placeholder": "例如：Python 异步框架对比分析"
+    "topic_placeholder": "例如：Python 异步框架对比分析",
 }

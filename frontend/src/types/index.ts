@@ -27,14 +27,17 @@ export interface Task {
   order: number
   dependsOn: string[]
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
-  summary?: string
-  sourcesSummary?: string
-  notices?: string
+  summary?: string | null
+  sourcesSummary?: string | null
+  notices?: string | null
+  createdAt?: string
+  updatedAt?: string
   startedAt?: string
   completedAt?: string
 }
 
-export type WorkflowStatus = 'pending' | 'running' | 'all_success' | 'partial_failed' | 'all_failed' | 'report_failed'
+export type WorkflowStatus =
+  'pending' | 'running' | 'all_success' | 'partial_failed' | 'all_failed' | 'report_failed'
 
 export interface ResearchWorkflow {
   workflowId: string
@@ -42,8 +45,9 @@ export interface ResearchWorkflow {
   description?: string
   status: WorkflowStatus
   tasks: Task[]
-  reportUrl?: string
-  reportContent?: string
+  // 后端未生成报告时返回 null，类型上显式允许，避免上层强转
+  reportUrl?: string | null
+  reportContent?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -55,12 +59,18 @@ export interface SSEEvent {
   data: any
 }
 
-export function mapWorkflowStatusToDisplay(status: WorkflowStatus): 'pending' | 'running' | 'completed' | 'failed' {
+export function mapWorkflowStatusToDisplay(
+  status: WorkflowStatus | string
+): 'pending' | 'running' | 'completed' | 'failed' {
   if (status === 'all_success' || status === 'partial_failed') {
     return 'completed'
   }
   if (status === 'all_failed' || status === 'report_failed') {
     return 'failed'
   }
-  return status
+  if (status === 'pending' || status === 'running') {
+    return status
+  }
+  // 后端新增状态时按等待中处理，避免页面整块渲染为空白
+  return 'pending'
 }

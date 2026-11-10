@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import Any
+
 from sqlalchemy.orm import Session, joinedload
-from app.infrastructure.db.models import WorkflowModel, TaskModel
-from app.infrastructure.db.session import with_db_retry
+
+from app.infrastructure.db.models import TaskModel, WorkflowModel
+from harness.db.session import with_db_retry
 from harness.logger import logger
 
 
@@ -38,7 +40,7 @@ class BaseWorkflowRepository(ABC):
             self.db_session.rollback()
             raise
 
-    async def find_by_id(self, workflow_id: str) -> Optional[Any]:
+    async def find_by_id(self, workflow_id: str) -> Any | None:
         workflow_id_str = str(workflow_id)
 
         @with_db_retry(max_attempts=3)
@@ -67,7 +69,9 @@ class BaseWorkflowRepository(ABC):
 
         @with_db_retry(max_attempts=3)
         def _update():
-            model = self.db_session.query(WorkflowModel).filter_by(workflow_id=workflow_id_str).first()
+            model = (
+                self.db_session.query(WorkflowModel).filter_by(workflow_id=workflow_id_str).first()
+            )
             if model:
                 model.topic = workflow.topic
                 model.scenario_id = workflow.scenario_id

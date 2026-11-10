@@ -1,9 +1,7 @@
-from typing import Optional
-from app.infrastructure.db.models import WorkflowModel, TaskModel
-from app.infrastructure.db.repositories.base_workflow_repository import BaseWorkflowRepository
+from app.dev_survey.models.models import Task, Workflow
 from app.dev_survey.repositories import WorkflowRepository
-from app.dev_survey.models.models import Workflow, Task
-from harness.logger import logger
+from app.infrastructure.db.models import TaskModel, WorkflowModel
+from app.infrastructure.db.repositories.base_workflow_repository import BaseWorkflowRepository
 
 
 class DevSurveyWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRepository):
@@ -18,7 +16,7 @@ class DevSurveyWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRepository
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
-            completed_at=model.completed_at
+            completed_at=model.completed_at,
         )
         for task_model in model.tasks:
             task = self._task_to_domain_entity(task_model)
@@ -27,7 +25,7 @@ class DevSurveyWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRepository
 
     def _task_to_domain_entity(self, model: TaskModel) -> Task:
         status_value = model.status
-        if hasattr(status_value, 'value'):
+        if hasattr(status_value, "value"):
             status_value = status_value.value
 
         return Task(
@@ -45,7 +43,7 @@ class DevSurveyWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRepository
             created_at=model.created_at,
             updated_at=model.updated_at,
             started_at=model.started_at,
-            completed_at=model.completed_at
+            completed_at=model.completed_at,
         )
 
     def _to_persistence_model(self, workflow: Workflow) -> WorkflowModel:
@@ -59,5 +57,5 @@ class DevSurveyWorkflowRepositoryImpl(BaseWorkflowRepository, WorkflowRepository
             created_at=workflow.created_at,
             updated_at=workflow.updated_at,
             started_at=workflow.started_at,
-            completed_at=workflow.completed_at
+            completed_at=workflow.completed_at,
         )

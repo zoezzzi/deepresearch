@@ -1,5 +1,7 @@
 import sys
+
 from loguru import logger
+
 from .config import get_harness_settings
 from .observability.log_formatter import get_trace_format, trace_context_filter
 
@@ -11,7 +13,7 @@ logger.add(
     format=get_trace_format(),
     level="DEBUG" if settings.DEBUG else "INFO",
     colorize=True,
-    filter=trace_context_filter
+    filter=trace_context_filter,
 )
 
 logger.add(
@@ -22,7 +24,7 @@ logger.add(
     level="INFO",
     backtrace=True,
     diagnose=True,
-    filter=trace_context_filter
+    filter=trace_context_filter,
 )
 
 __all__ = ["logger"]

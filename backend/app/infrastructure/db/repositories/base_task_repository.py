@@ -1,8 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any
+from typing import Any
+
 from sqlalchemy.orm import Session
+
 from app.infrastructure.db.models import TaskModel
-from app.infrastructure.db.session import with_db_retry
+from harness.db.session import with_db_retry
 from harness.logger import logger
 
 
@@ -34,7 +36,7 @@ class BaseTaskRepository(ABC):
             self.db_session.rollback()
             raise
 
-    async def save_batch(self, tasks: List[Any]) -> None:
+    async def save_batch(self, tasks: list[Any]) -> None:
         logger.info(f"Saving batch of {len(tasks)} tasks")
         models = [self._to_persistence_model(task) for task in tasks]
 
@@ -50,7 +52,7 @@ class BaseTaskRepository(ABC):
             self.db_session.rollback()
             raise
 
-    async def find_by_id(self, task_id: str) -> Optional[Any]:
+    async def find_by_id(self, task_id: str) -> Any | None:
         logger.info(f"Finding task by id: {task_id}")
 
         @with_db_retry(max_attempts=3)
@@ -68,7 +70,7 @@ class BaseTaskRepository(ABC):
             self.db_session.rollback()
             raise
 
-    async def find_by_ids(self, task_ids: List[str]) -> List[Any]:
+    async def find_by_ids(self, task_ids: list[str]) -> list[Any]:
         """批量查询 task，一次查询替代 N 次 find_by_id"""
         if not task_ids:
             return []
@@ -76,9 +78,7 @@ class BaseTaskRepository(ABC):
 
         @with_db_retry(max_attempts=3)
         def _find():
-            models = self.db_session.query(TaskModel).filter(
-                TaskModel.task_id.in_(task_ids)
-            ).all()
+            models = self.db_session.query(TaskModel).filter(TaskModel.task_id.in_(task_ids)).all()
             return [self._to_domain_entity(model) for model in models]
 
         try:
@@ -89,12 +89,17 @@ class BaseTaskRepository(ABC):
             self.db_session.rollback()
             raise
 
-    async def find_by_workflow_id(self, workflow_id: str) -> List[Any]:
+    async def find_by_workflow_id(self, workflow_id: str) -> list[Any]:
         logger.info(f"Finding tasks by workflow id: {workflow_id}")
 
         @with_db_retry(max_attempts=3)
         def _find():
-            models = self.db_session.query(TaskModel).filter_by(workflow_id=workflow_id).order_by(TaskModel.order).all()
+            models = (
+                self.db_session.query(TaskModel)
+                .filter_by(workflow_id=workflow_id)
+                .order_by(TaskModel.order)
+                .all()
+            )
             return [self._to_domain_entity(model) for model in models]
 
         try:
@@ -132,7 +137,7 @@ class BaseTaskRepository(ABC):
             self.db_session.rollback()
             raise
 
-    async def update_batch(self, tasks: List[Any]) -> None:
+    async def update_batch(self, tasks: list[Any]) -> None:
         logger.info(f"Updating batch of {len(tasks)} tasks")
 
         from app.common.utils.time_utils import get_current_utc_time

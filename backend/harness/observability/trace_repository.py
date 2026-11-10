@@ -3,14 +3,15 @@ Trace 仓储接口
 
 定义追踪数据持久化的抽象接口
 """
+
 from abc import ABC, abstractmethod
-from typing import Optional, List
+
 from harness.observability.trace_models import (
-    WorkflowTraceCreate,
-    WorkflowTraceUpdate,
     TaskTraceCreate,
     TaskTraceUpdate,
+    WorkflowTraceCreate,
     WorkflowTraceResponse,
+    WorkflowTraceUpdate,
 )
 
 
@@ -32,9 +33,9 @@ class TraceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_trace_by_workflow_id(self, workflow_id: str) -> Optional[WorkflowTraceResponse]:
+    async def get_trace_by_workflow_id(self, workflow_id: str) -> WorkflowTraceResponse | None:
         pass
 
     @abstractmethod
-    async def get_task_traces_by_workflow_id(self, workflow_id: str) -> List:
+    async def get_task_traces_by_workflow_id(self, workflow_id: str) -> list:
         pass

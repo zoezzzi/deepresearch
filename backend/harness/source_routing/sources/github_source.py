@@ -1,22 +1,29 @@
 import aiohttp
-from typing import List, Dict, Any, Optional
-from tenacity import stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry_if_exception_type, stop_after_attempt, wait_exponential
 from tenacity.asyncio import AsyncRetrying
-from harness.source_routing.sources.base import SearchSource, SearchResult
+
 from harness.config import get_harness_settings
 from harness.logger import logger
+from harness.source_routing.sources.base import SearchResult, SearchSource
 
 settings = get_harness_settings()
 
 
 class GitHubSearchSource(SearchSource):
+    """GitHub search source supporting repository, issue and code queries.
+
+    Lazily creates and reuses an aiohttp session; long-lived instances should
+    call ``close`` on shutdown.
+    """
+
     def __init__(self):
         self.api_key = getattr(settings, "GITHUB_API_KEY", None)
         self.base_url = "https://api.github.com"
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         logger.debug("GitHubSearchSource initialized")
 
     async def _get_session(self) -> aiohttp.ClientSession:
+        """Return a live session, recreating it if it was closed."""
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(
                 limit=10,
@@ -28,62 +35,61 @@ class GitHubSearchSource(SearchSource):
         return self._session
 
     async def close(self):
+        """Close the shared HTTP session if it is still open."""
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def search(self, query: str, **kwargs) -> List[SearchResult]:
+    async def search(self, query: str, **kwargs) -> list[SearchResult]:
+        """Search GitHub and normalize hits.
+
+        Supported kwargs: ``max_results`` (5), ``search_type``
+        ("repositories" | "issues" | "code"). Non-200 responses yield an empty
+        list rather than raising, since search failures should not abort a task.
+        """
         max_results = kwargs.get("max_results", 5)
         search_type = kwargs.get("search_type", "repositories")
-        
+
         retrying = AsyncRetrying(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=2, max=10),
-            retry=retry_if_exception_type((ConnectionError, aiohttp.ClientError))
+            retry=retry_if_exception_type((ConnectionError, aiohttp.ClientError)),
         )
-        
+
         async for attempt in retrying:
             with attempt:
                 logger.info(f"Searching GitHub for: {query}")
-                
+
                 headers = {
                     "Accept": "application/vnd.github.v3+json",
-                    "User-Agent": "DeepResearch/1.0"
+                    "User-Agent": "DeepResearch/1.0",
                 }
                 if self.api_key:
                     headers["Authorization"] = f"token {self.api_key}"
-                
+
                 session = await self._get_session()
                 if search_type == "repositories":
                     url = f"{self.base_url}/search/repositories"
-                    params = {
-                        "q": query,
-                        "sort": "stars",
-                        "order": "desc",
-                        "per_page": max_results
-                    }
+                    params = {"q": query, "sort": "stars", "order": "desc", "per_page": max_results}
                 elif search_type == "issues":
                     url = f"{self.base_url}/search/issues"
                     params = {
                         "q": query,
                         "sort": "updated",
                         "order": "desc",
-                        "per_page": max_results
+                        "per_page": max_results,
                     }
                 else:
                     url = f"{self.base_url}/search/code"
-                    params = {
-                        "q": query,
-                        "per_page": max_results
-                    }
-                
+                    params = {"q": query, "per_page": max_results}
+
                 async with session.get(url, headers=headers, params=params) as response:
                     if response.status != 200:
                         logger.error(f"GitHub API returned status {response.status}")
                         return []
-                    
+
                     data = await response.json()
                     results = []
-                    
+
                     items = data.get("items", [])
                     for item in items[:max_results]:
                         if search_type == "repositories":
@@ -101,13 +107,9 @@ class GitHubSearchSource(SearchSource):
                             title = item.get("name", "")
                             url = item.get("html_url", "")
                             content = item.get("repository", {}).get("full_name", "")
-                        
-                        search_result = SearchResult(
-                            title=title,
-                            url=url,
-                            content=content
-                        )
+
+                        search_result = SearchResult(title=title, url=url, content=content)
                         results.append(search_result)
-                    
+
                     logger.info(f"Found {len(results)} results from GitHub")
                     return results

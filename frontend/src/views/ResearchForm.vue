@@ -2,11 +2,9 @@
   <div class="research-form-container">
     <div class="form-card">
       <h2 class="form-title">{{ currentUIConfig.formTitle }}</h2>
-      <p class="form-description">
-        输入您感兴趣的主题，AI 将帮助您完成系统性的调研并生成完整报告
-      </p>
+      <p class="form-description">输入您感兴趣的主题，AI 将帮助您完成系统性的调研并生成完整报告</p>
 
-      <form @submit.prevent="handleSubmit" class="form">
+      <form class="form" @submit.prevent="handleSubmit">
         <div class="form-group">
           <label for="topic" class="form-label">{{ currentUIConfig.topicLabel }}</label>
           <input
@@ -15,6 +13,7 @@
             type="text"
             class="form-input"
             :placeholder="currentUIConfig.topicPlaceholder"
+            maxlength="200"
             required
           />
         </div>
@@ -27,14 +26,11 @@
             class="form-textarea"
             placeholder="请描述您希望调研的方向、关注点或具体问题..."
             rows="5"
+            maxlength="5000"
           ></textarea>
         </div>
 
-        <button
-          type="submit"
-          class="submit-button"
-          :disabled="isSubmitting || !topic.trim()"
-        >
+        <button type="submit" class="submit-button" :disabled="isSubmitting || !topic.trim()">
           <span v-if="isSubmitting" class="loading">
             <span class="spinner"></span>
             正在创建调研...
@@ -73,7 +69,7 @@ async function handleSubmit() {
   try {
     const workflowId = await researchStore.createResearch(topic.value, description.value)
     router.push(`/research/${workflowId}`)
-  } catch (err) {
+  } catch {
     error.value = researchStore.error || '创建调研失败，请稍后重试'
   } finally {
     isSubmitting.value = false
@@ -132,7 +128,9 @@ async function handleSubmit() {
   border: 2px solid #e2e8f0;
   border-radius: 8px;
   font-size: 1rem;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
   font-family: inherit;
 }
 
@@ -157,7 +155,9 @@ async function handleSubmit() {
   font-size: 1.125rem;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
   display: flex;
   align-items: center;
   justify-content: center;

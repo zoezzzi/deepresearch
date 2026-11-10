@@ -3,25 +3,25 @@ Trace 服务
 
 提供追踪业务的统一服务接口，支持异步写入、容错处理
 """
-from typing import Optional, Dict, Any
-from datetime import datetime, timezone
-from uuid import uuid4
 
+from datetime import UTC, datetime
+from typing import Any
+
+from harness.logger import logger
 from harness.observability.trace_context import (
-    generate_trace_id,
     generate_span_id,
-    set_trace_context,
+    generate_trace_id,
     get_current_langsmith_run_id,
     set_current_langsmith_run_id,
+    set_trace_context,
 )
 from harness.observability.trace_models import (
-    WorkflowTraceCreate,
-    WorkflowTraceUpdate,
     TaskTraceCreate,
     TaskTraceUpdate,
+    WorkflowTraceCreate,
+    WorkflowTraceUpdate,
 )
 from harness.observability.trace_repository import TraceRepository
-from harness.logger import logger
 
 
 def _calculate_duration_ms(started_at: datetime, completed_at: datetime) -> int:
@@ -31,6 +31,13 @@ def _calculate_duration_ms(started_at: datetime, completed_at: datetime) -> int:
 
 
 class TraceService:
+    """Persist workflow/task execution traces for later inspection.
+
+    Trace records are written through a ``TraceRepository`` abstraction so the
+    harness layer stays independent from the database implementation. Failures
+    in tracing are propagated to callers; no silent swallowing happens here.
+    """
+
     def __init__(self, repository: TraceRepository):
         self.repository = repository
 
@@ -38,11 +45,15 @@ class TraceService:
         self,
         workflow_id: str,
         scenario_id: str,
-        trace_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-        topic: Optional[str] = None,
-        description: Optional[str] = None,
+        trace_id: str | None = None,
+        request_id: str | None = None,
+        topic: str | None = None,
+        description: str | None = None,
     ) -> str:
+        """Create the root trace for a workflow and bind it to the current context.
+
+        Returns the effective trace id (generated when not supplied).
+        """
         if not trace_id:
             trace_id = generate_trace_id()
 
@@ -54,32 +65,41 @@ class TraceService:
             # 如果没有 LangSmith 运行 ID，就用 trace_id 作为替代
             langsmith_run_id = trace_id
             set_current_langsmith_run_id(langsmith_run_id)
-            logger.info(f"[TraceService] Using trace_id as default langsmith_run_id: {langsmith_run_id}")
+            logger.info(
+                f"[TraceService] Using trace_id as default langsmith_run_id: {langsmith_run_id}"
+            )
 
         trace = WorkflowTraceCreate(
             trace_id=trace_id,
             workflow_id=workflow_id,
             request_id=request_id,
             scenario_id=scenario_id,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             status="running",
             langsmith_run_id=langsmith_run_id,
         )
 
         await self.repository.create_workflow_trace(trace)
 
-        logger.info(f"[TraceService] Started workflow trace: {trace_id} for workflow: {workflow_id}")
+        logger.info(
+            f"[TraceService] Started workflow trace: {trace_id} for workflow: {workflow_id}"
+        )
         return trace_id
 
     async def complete_workflow_trace(
         self,
         workflow_id: str,
         status: str,
-        langsmith_url: Optional[str] = None,
-        report_url: Optional[str] = None,
-        execute_duration_ms: Optional[int] = None,
+        langsmith_url: str | None = None,
+        report_url: str | None = None,
+        execute_duration_ms: int | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc)
+        """Mark the workflow trace as finished with the given status.
+
+        ``duration_ms`` is left to the repository so it can compute it from the
+        stored ``started_at`` in the database's own clock.
+        """
+        now = datetime.now(UTC)
 
         # 获取当前 LangSmith 运行 ID（可能在执行过程中更新）
         langsmith_run_id = get_current_langsmith_run_id()
@@ -103,13 +123,18 @@ class TraceService:
         task_id: str,
         task_title: str,
         task_order: int,
-        trace_id: Optional[str] = None,
-        span_id: Optional[str] = None,
-        input_query: Optional[str] = None,
-        input_intent: Optional[str] = None,
+        trace_id: str | None = None,
+        span_id: str | None = None,
+        input_query: str | None = None,
+        input_intent: str | None = None,
     ) -> str:
+        """Create a child span for a task and make it the current span.
+
+        Returns the span id used for later completion/failure updates.
+        """
         if not trace_id:
             from harness.observability.trace_context import trace_id_var
+
             trace_id = trace_id_var.get() or generate_trace_id()
 
         if not span_id:
@@ -121,7 +146,9 @@ class TraceService:
             # 如果没有 LangSmith 运行 ID，就用 span_id 作为替代
             langsmith_run_id = span_id
             set_current_langsmith_run_id(langsmith_run_id)
-            logger.info(f"[TraceService] Using span_id as default langsmith_run_id: {langsmith_run_id}")
+            logger.info(
+                f"[TraceService] Using span_id as default langsmith_run_id: {langsmith_run_id}"
+            )
 
         trace = TaskTraceCreate(
             trace_id=trace_id,
@@ -130,7 +157,7 @@ class TraceService:
             span_id=span_id,
             task_title=task_title,
             task_order=task_order,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             status="running",
             input_query=input_query,
             input_intent=input_intent,
@@ -147,11 +174,12 @@ class TraceService:
     async def complete_task_trace(
         self,
         span_id: str,
-        output_summary: Optional[str] = None,
-        output_sources: Optional[Dict[str, Any]] = None,
-        langsmith_run_id: Optional[str] = None,
+        output_summary: str | None = None,
+        output_sources: dict[str, Any] | None = None,
+        langsmith_run_id: str | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc)
+        """Close a task span as succeeded, recording output summary and sources."""
+        now = datetime.now(UTC)
 
         # 如果没有传入 langsmith_run_id，从上下文获取
         if not langsmith_run_id:
@@ -173,9 +201,10 @@ class TraceService:
         self,
         span_id: str,
         error_message: str,
-        langsmith_run_id: Optional[str] = None,
+        langsmith_run_id: str | None = None,
     ) -> None:
-        now = datetime.now(timezone.utc)
+        """Close a task span as failed and store the error message."""
+        now = datetime.now(UTC)
 
         if not langsmith_run_id:
             langsmith_run_id = get_current_langsmith_run_id()
@@ -191,8 +220,13 @@ class TraceService:
 
         logger.info(f"[TraceService] Failed task trace: {span_id}")
 
-    async def restore_trace_context(self, workflow_id: str) -> Optional[str]:
-        """从数据库中恢复 trace 上下文到当前请求"""
+    async def restore_trace_context(self, workflow_id: str) -> str | None:
+        """Restore the trace context from the database for the current request.
+
+        Intended for background tasks that have no originating request context
+        but must keep writing into the same trace; returns None when the
+        workflow has no recorded trace.
+        """
         trace = await self.repository.get_trace_by_workflow_id(workflow_id)
         if not trace:
             return None
@@ -207,8 +241,9 @@ class TraceService:
         self,
         workflow_id: str,
         langsmith_run_id: str,
-        langsmith_url: Optional[str] = None,
+        langsmith_url: str | None = None,
     ) -> None:
+        """Patch the workflow trace with LangSmith run id/link once known."""
         update = WorkflowTraceUpdate(
             langsmith_run_id=langsmith_run_id,
             langsmith_url=langsmith_url,
@@ -217,7 +252,7 @@ class TraceService:
         await self.repository.update_workflow_trace(workflow_id, update)
 
 
-def get_trace_service(repository: Optional[TraceRepository] = None) -> TraceService:
+def get_trace_service(repository: TraceRepository | None = None) -> TraceService:
     """获取 TraceService 实例。
 
     注意：harness 层不直接依赖 app 层。调用方（app/service_factory）

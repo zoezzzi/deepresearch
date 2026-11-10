@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional
+
 from app.dev_survey.models.models import Task
 
 
@@ -9,19 +9,19 @@ class TaskRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_batch(self, tasks: List[Task]) -> None:
+    async def save_batch(self, tasks: list[Task]) -> None:
         pass
 
     @abstractmethod
-    async def find_by_id(self, task_id: str) -> Optional[Task]:
+    async def find_by_id(self, task_id: str) -> Task | None:
         pass
 
     @abstractmethod
-    async def find_by_ids(self, task_ids: List[str]) -> List[Task]:
+    async def find_by_ids(self, task_ids: list[str]) -> list[Task]:
         pass
 
     @abstractmethod
-    async def find_by_workflow_id(self, workflow_id: str) -> List[Task]:
+    async def find_by_workflow_id(self, workflow_id: str) -> list[Task]:
         pass
 
     @abstractmethod
@@ -29,5 +29,5 @@ class TaskRepository(ABC):
         pass
 
     @abstractmethod
-    async def update_batch(self, tasks: List[Task]) -> None:
+    async def update_batch(self, tasks: list[Task]) -> None:
         pass

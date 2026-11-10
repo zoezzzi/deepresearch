@@ -9,14 +9,19 @@
         </p>
       </div>
       <div class="header-actions">
-        <button v-if="workflow?.reportUrl" class="download-button" @click="downloadReport" :disabled="downloading">
+        <button
+          v-if="workflow?.reportUrl"
+          class="download-button"
+          :disabled="downloading"
+          @click="downloadReport"
+        >
           {{ downloading ? '下载中...' : '下载报告' }}
         </button>
       </div>
     </div>
 
-    <div v-if="error" class="error-alert">
-      {{ error }}
+    <div v-if="error || downloadError" class="error-alert">
+      {{ downloadError || error }}
     </div>
 
     <div v-if="isLoading" class="loading-container">
@@ -43,12 +48,14 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { marked } from 'marked'
+import { ApiError, researchApi } from '@/api/client'
 import { useResearchStore } from '@/stores/research'
 
 const route = useRoute()
 const researchStore = useResearchStore()
 const workflowId = route.params.workflowId as string
 const downloading = ref(false)
+const downloadError = ref('')
 
 const workflow = computed(() => researchStore.currentWorkflow)
 const reportContent = computed(() => researchStore.reportContent)
@@ -56,44 +63,60 @@ const isLoading = computed(() => researchStore.isLoading)
 const error = computed(() => researchStore.error)
 
 const renderedMarkdown = computed(() => {
-  return marked(reportContent.value || '')
+  try {
+    return marked(reportContent.value || '') as string
+  } catch (err) {
+    console.error('[ReportPreview] 报告渲染失败:', err)
+    return '<p>报告渲染失败，请稍后重试或下载原文查看</p>'
+  }
 })
 
-function downloadReport() {
-  if (!workflow.value?.reportUrl) return
-  
+async function downloadReport() {
+  const reportUrl = workflow.value?.reportUrl
+  if (!reportUrl) return
+
   downloading.value = true
-  
-  // 创建临时 a 标签触发下载
-  const link = document.createElement('a')
-  link.href = workflow.value.reportUrl
-  link.download = `report-${workflowId}.md`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  
-  // 添加用户提示
-  setTimeout(() => {
-    showMessage('报告已开始下载', 'success')
+  downloadError.value = ''
+
+  try {
+    // 必须走 /api 代理下载，直接打开 reportUrl 会绕过代理导致 404
+    const blob = await researchApi.downloadReport(
+      reportUrl,
+      researchStore.selectedScenarioId || undefined
+    )
+    const objectUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `report-${workflowId}.md`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(objectUrl)
+  } catch (err) {
+    downloadError.value = err instanceof ApiError ? err.message : '报告下载失败，请稍后重试'
+    console.error('[ReportPreview] 报告下载失败:', err)
+  } finally {
     downloading.value = false
-  }, 500)
+  }
 }
 
-function showMessage(text: string, type: 'success' | 'error' = 'success') {
-  console.log(`${type.toUpperCase()}: ${text}`)
-  alert(text)
-}
+async function loadReport() {
+  if (!workflowId) return
 
-onMounted(async () => {
-  if (workflowId) {
+  try {
     if (!researchStore.currentWorkflow || researchStore.currentWorkflow.workflowId !== workflowId) {
       await researchStore.fetchWorkflow(workflowId)
     } else if (researchStore.currentWorkflow.reportUrl && !researchStore.reportContent) {
       // 如果工作流已加载但报告内容未加载，加载报告内容
       await researchStore.fetchReportContent(workflowId)
     }
+  } catch (err) {
+    // store 已写入可展示的错误信息，这里只避免未处理的 Promise 拒绝
+    console.error('[ReportPreview] 加载报告失败:', err)
   }
-})
+}
+
+onMounted(loadReport)
 </script>
 
 <style scoped>
@@ -153,7 +176,9 @@ onMounted(async () => {
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
   white-space: nowrap;
 }
 

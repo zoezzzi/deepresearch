@@ -1,12 +1,12 @@
-from .event_types import (
-    PlanEvent,
-    TaskStartEvent,
-    TaskCompleteEvent,
-    ChunkEvent,
-    ResultEvent,
-    ErrorEvent
-)
 from .event_publisher import EventPublisher, get_event_publisher
+from .event_types import (
+    ChunkEvent,
+    ErrorEvent,
+    PlanEvent,
+    ResultEvent,
+    TaskCompleteEvent,
+    TaskStartEvent,
+)
 
 __all__ = [
     "PlanEvent",
@@ -16,5 +16,5 @@ __all__ = [
     "ResultEvent",
     "ErrorEvent",
     "EventPublisher",
-    "get_event_publisher"
+    "get_event_publisher",
 ]

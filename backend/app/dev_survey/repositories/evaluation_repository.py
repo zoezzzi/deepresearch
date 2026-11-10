@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List
+
 from app.research_assistant.models.models import EvaluationResult
 
 
@@ -9,11 +9,11 @@ class EvaluationRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_id(self, evaluation_id: str) -> Optional[EvaluationResult]:
+    async def find_by_id(self, evaluation_id: str) -> EvaluationResult | None:
         pass
 
     @abstractmethod
-    async def find_by_workflow_id(self, workflow_id: str) -> List[EvaluationResult]:
+    async def find_by_workflow_id(self, workflow_id: str) -> list[EvaluationResult]:
         pass
 
     @abstractmethod

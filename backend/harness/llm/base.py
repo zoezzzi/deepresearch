@@ -1,14 +1,24 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, List, Dict, Any
+from collections.abc import AsyncGenerator
 
 
 class LLMClient(ABC):
+    """Abstract LLM client contract.
+
+    Implementations must be safe to call concurrently and should release network
+    resources in ``close``.
+    """
+
     @abstractmethod
-    async def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    async def chat(self, messages: list[dict[str, str]], **kwargs) -> str:
+        """Return the assistant reply as plain text."""
         pass
 
     @abstractmethod
-    async def chat_stream(self, messages: List[Dict[str, str]], **kwargs) -> AsyncGenerator[str, None]:
+    async def chat_stream(
+        self, messages: list[dict[str, str]], **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """Yield the assistant reply incrementally as text chunks."""
         pass
 
     async def close(self):

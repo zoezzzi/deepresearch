@@ -1,17 +1,24 @@
-from typing import Dict, Type, Optional, Tuple
+"""LLM client factory with a process-wide cache.
+
+The cache key is the provider name and entries carry a TTL. Expired clients are
+closed asynchronously when an event loop is available, so destructors never
+block the request thread.
+"""
+
 import asyncio
 import threading
 import time
+
+from harness.config import get_harness_settings
 from harness.llm.base import LLMClient
 from harness.llm.langchain_client import LangChainClient
-from harness.config import get_harness_settings
 from harness.logger import logger
 
 settings = get_harness_settings()
 
 _TTL_SECONDS = 30 * 60
 
-_client_cache: Dict[str, Tuple[LLMClient, float]] = {}
+_client_cache: dict[str, tuple[LLMClient, float]] = {}
 _cache_lock = threading.Lock()
 
 
@@ -25,22 +32,30 @@ def _schedule_client_close(client: LLMClient) -> None:
 
 
 class LLMFactory:
-    _clients: Dict[str, Type[LLMClient]] = {
+    """Map provider names to client implementations.
+
+    All providers reuse ``LangChainClient`` (OpenAI-compatible protocol) by
+    default; ``register_client`` swaps in a custom implementation.
+    """
+
+    _clients: dict[str, type[LLMClient]] = {
         "qwen": LangChainClient,
         "langchain": LangChainClient,
         "openai": LangChainClient,
         "custom": LangChainClient,
         "ollama": LangChainClient,
-        "lmstudio": LangChainClient
+        "lmstudio": LangChainClient,
     }
 
     @classmethod
-    def register_client(cls, name: str, client_class: Type[LLMClient]) -> None:
+    def register_client(cls, name: str, client_class: type[LLMClient]) -> None:
+        """Override the implementation used for a provider name."""
         cls._clients[name] = client_class
         logger.info(f"Registered LLM client: {name}")
 
     @classmethod
-    def create_client(cls, name: Optional[str] = None) -> LLMClient:
+    def create_client(cls, name: str | None = None) -> LLMClient:
+        """Instantiate a new (uncached) client for the given provider."""
         if name is None:
             name = settings.LLM_PROVIDER
 
@@ -50,7 +65,7 @@ class LLMFactory:
         return cls._clients[name]()
 
 
-def get_llm_client(name: Optional[str] = None) -> LLMClient:
+def get_llm_client(name: str | None = None) -> LLMClient:
     """
     获取 LLM 客户端（使用缓存进行复用）
 
@@ -81,11 +96,11 @@ def get_llm_client(name: Optional[str] = None) -> LLMClient:
             client, created_at = entry
             if time.monotonic() - created_at < _TTL_SECONDS:
                 return client
-        
+
         old_entry = _client_cache.get(cache_key)
         if old_entry is not None:
             old_client = old_entry[0]
-        
+
         logger.debug(f"[LLMClientCache] Creating new LLM client: {cache_key}")
         _client_cache[cache_key] = (LLMFactory.create_client(name), time.monotonic())
 
@@ -108,7 +123,7 @@ async def clear_llm_client_cache():
     logger.info("[LLMClientCache] Cache cleared")
 
 
-async def remove_llm_client(name: Optional[str] = None):
+async def remove_llm_client(name: str | None = None):
     """
     移除指定 LLM 客户端缓存
 

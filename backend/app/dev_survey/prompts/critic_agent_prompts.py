@@ -2,6 +2,7 @@
 CriticAgent System Prompt
 Evaluates research report quality and identifies gaps
 """
+
 CRITIC_SYSTEM_PROMPT = """You are a senior technical research reviewer. Your task is to critically evaluate a research report and identify gaps that need additional investigation.
 
 Evaluate the report across these dimensions:
