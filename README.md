@@ -27,22 +27,38 @@ flowchart TD
 
     subgraph FE["前端 (Vue3 + TS)"]
         direction LR
-        f1[调研表单] ~~~ f2[任务看板] ~~~ f3[报告预览] ~~~ f4[SSE 状态同步]
+        f1[调研表单]
+        f2[任务看板]
+        f3[报告预览]
+        f4[SSE 状态同步]
     end
 
     subgraph API["接口层 API Layer"]
         direction LR
-        a1[Controllers] ~~~ a2[API Models] ~~~ a3[Dependencies]
+        a1[Controllers]
+        a2[API Models]
+        a3[Dependencies]
     end
 
     subgraph CORE["核心层 Core Layer"]
         direction LR
-        c1[Models<br/>Pydantic] ~~~ c2[Services<br/>业务逻辑] ~~~ c3[Agents<br/>AI 代理] ~~~ c4[Workflow<br/>LangGraph] ~~~ c5[Events<br/>SSE] ~~~ c6[Repositories<br/>数据接口]
+        c1[Models<br/>Pydantic]
+        c2[Services<br/>业务逻辑]
+        c3[Agents<br/>AI 代理]
+        c4[Workflow<br/>LangGraph]
+        c5[Events<br/>SSE]
+        c6[Repositories<br/>数据接口]
     end
 
     subgraph INFRA["基础设施层 Infrastructure Layer"]
         direction LR
-        i1[Config] ~~~ i2[Logger] ~~~ i3[DB] ~~~ i4[SSE] ~~~ i5[LLM] ~~~ i6[Search] ~~~ i7[Storage]
+        i1[Config]
+        i2[Logger]
+        i3[DB]
+        i4[SSE]
+        i5[LLM]
+        i6[Search]
+        i7[Storage]
     end
 
     FE -->|REST API / SSE| API
@@ -88,7 +104,7 @@ flowchart TD
 
 同一批 28 份历史报告，用两种方法分别评分：**确定性规则评估**与 **RAGAS + LLM 判断**，两者结果一致。
 
-<img src="assets/benchmark/benchmark_quality.png" alt="benchmark_quality" style="zoom: 15%;" />
+<img src="assets/benchmark/benchmark_quality.png" alt="benchmark_quality"  width="400" />
 
 整体达标率 **85.7%**（24/28）。
 
